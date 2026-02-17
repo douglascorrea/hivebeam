@@ -1,0 +1,18 @@
+services:
+  codex-node:
+    build:
+      context: .
+      dockerfile: Dockerfile.codex
+    container_name: codex-node
+    user: node
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - codex-config:/home/node/.codex
+    ports:
+      - "1455:1455"
+    tty: true
+    stdin_open: true
+
+volumes:
+  codex-config:

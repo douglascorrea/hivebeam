@@ -1,0 +1,14 @@
+FROM node:20-bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @openai/codex \
+    && mkdir -p /home/node/.codex \
+    && chown -R node:node /home/node/.codex
+
+USER node
+
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]
