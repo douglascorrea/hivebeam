@@ -1,0 +1,311 @@
+defmodule Mix.Tasks.Codex.Live do
+  use Mix.Task
+
+  alias ElxDockerNode.Codex
+  alias ElxDockerNode.CodexCli
+
+  @shortdoc "Realtime local/remote Codex prompts and chat with auto node setup"
+
+  @switches [
+    node: :keep,
+    remote_ip: :keep,
+    remote_self: :boolean,
+    remote_name: :string,
+    local: :boolean,
+    message: :string,
+    chat: :boolean,
+    timeout: :integer,
+    stream: :boolean,
+    thoughts: :boolean,
+    tools: :boolean,
+    approve: :string,
+    name: :string,
+    host_ip: :string,
+    cookie: :string,
+    dist_port: :integer,
+    epmd: :string
+  ]
+
+  @aliases [
+    n: :node,
+    m: :message,
+    t: :timeout,
+    c: :cookie
+  ]
+
+  @impl Mix.Task
+  def run(args) do
+    Mix.Task.run("app.start")
+
+    {opts, _argv, invalid} = OptionParser.parse(args, strict: @switches, aliases: @aliases)
+    validate_invalid!(invalid)
+
+    approval_mode = CodexCli.parse_approval_mode!(Keyword.get(opts, :approve, "ask"))
+
+    {targets, remote_targets} = build_targets(opts)
+
+    ensure_distribution!(remote_targets, opts)
+    connect_remote_targets!(remote_targets)
+
+    prompt_opts = [
+      timeout: Keyword.get(opts, :timeout),
+      stream: Keyword.get(opts, :stream, true),
+      show_thoughts: Keyword.get(opts, :thoughts, true),
+      show_tools: Keyword.get(opts, :tools, true),
+      approval_mode: approval_mode
+    ]
+
+    if Keyword.get(opts, :chat, false) do
+      run_chat(targets, prompt_opts, Keyword.get(opts, :message))
+    else
+      message = required!(opts, :message, "--message")
+
+      Enum.each(targets, fn target ->
+        run_prompt!(target, message, prompt_opts)
+      end)
+    end
+  end
+
+  defp run_chat(targets, prompt_opts, first_message) do
+    Mix.shell().info("Chat mode enabled. Commands: /targets, /use <n>, /status, /exit")
+    active_index = 0
+
+    active_index =
+      if is_binary(first_message) and String.trim(first_message) != "" do
+        run_prompt!(Enum.at(targets, active_index), first_message, prompt_opts)
+        active_index
+      else
+        active_index
+      end
+
+    chat_loop(targets, active_index, prompt_opts)
+  end
+
+  defp chat_loop(targets, active_index, prompt_opts) do
+    target = Enum.at(targets, active_index)
+    label = target_label(target)
+
+    case IO.gets("[#{label}] you> ") do
+      nil ->
+        :ok
+
+      raw_line ->
+        line = String.trim(raw_line)
+
+        cond do
+          line == "" ->
+            chat_loop(targets, active_index, prompt_opts)
+
+          line in ["/exit", "exit", "quit", ":q"] ->
+            :ok
+
+          line == "/targets" ->
+            print_targets(targets, active_index)
+            chat_loop(targets, active_index, prompt_opts)
+
+          String.starts_with?(line, "/use ") ->
+            next_index = parse_target_index(line, targets, active_index)
+            chat_loop(targets, next_index, prompt_opts)
+
+          line == "/status" ->
+            print_status(target)
+            chat_loop(targets, active_index, prompt_opts)
+
+          true ->
+            run_prompt!(target, line, prompt_opts)
+            chat_loop(targets, active_index, prompt_opts)
+        end
+    end
+  end
+
+  defp run_prompt!(target, message, prompt_opts) do
+    Mix.shell().info("[#{target_label(target)}] prompt: #{message}")
+
+    case CodexCli.prompt(target, message, prompt_opts) do
+      {:ok, result} ->
+        Mix.shell().info("[#{target_label(target)}] session_id=#{result.session_id}")
+        Mix.shell().info("[#{target_label(target)}] stop_reason=#{result.stop_reason}")
+
+      {:error, reason} ->
+        Mix.raise("Prompt failed for #{target_label(target)}: #{inspect(reason)}")
+    end
+  end
+
+  defp print_status(nil) do
+    case Codex.status(nil) do
+      {:ok, status} -> Mix.shell().info(inspect(status, pretty: true, limit: :infinity))
+      {:error, reason} -> Mix.shell().error("Could not fetch status: #{inspect(reason)}")
+    end
+  end
+
+  defp print_status(node) do
+    case Codex.status(node) do
+      {:ok, status} -> Mix.shell().info(inspect(status, pretty: true, limit: :infinity))
+      {:error, reason} -> Mix.shell().error("Could not fetch status: #{inspect(reason)}")
+    end
+  end
+
+  defp print_targets(targets, active_index) do
+    targets
+    |> Enum.with_index()
+    |> Enum.each(fn {target, index} ->
+      marker = if index == active_index, do: "*", else: " "
+      Mix.shell().info("#{marker} #{index + 1}. #{target_label(target)}")
+    end)
+  end
+
+  defp parse_target_index(line, targets, fallback_index) do
+    value =
+      line
+      |> String.replace_prefix("/use", "")
+      |> String.trim()
+
+    case Integer.parse(value) do
+      {idx, ""} when idx > 0 and idx <= length(targets) ->
+        idx - 1
+
+      _ ->
+        Mix.shell().error("Invalid target index: #{value}")
+        fallback_index
+    end
+  end
+
+  defp build_targets(opts) do
+    remote_name = Keyword.get(opts, :remote_name, "codex")
+    remote_self? = Keyword.get(opts, :remote_self, false)
+
+    nodes_from_flag =
+      opts
+      |> Keyword.get_values(:node)
+      |> Enum.flat_map(&split_csv/1)
+      |> Enum.map(&String.to_atom/1)
+
+    nodes_from_ip =
+      opts
+      |> Keyword.get_values(:remote_ip)
+      |> Enum.flat_map(&split_csv/1)
+      |> Enum.map(fn ip -> String.to_atom("#{remote_name}@#{ip}") end)
+
+    nodes_from_self =
+      if remote_self? do
+        host_ip = Keyword.get(opts, :host_ip) || detect_host_ip()
+        [String.to_atom("#{remote_name}@#{host_ip}")]
+      else
+        []
+      end
+
+    remote_targets = Enum.uniq(nodes_from_flag ++ nodes_from_ip ++ nodes_from_self)
+    include_local? = Keyword.get(opts, :local, false) or remote_targets == []
+
+    targets =
+      if(include_local?, do: [nil], else: [])
+      |> Kernel.++(remote_targets)
+      |> Enum.uniq()
+
+    {targets, remote_targets}
+  end
+
+  defp split_csv(value) do
+    value
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp ensure_distribution!([], _opts), do: :ok
+
+  defp ensure_distribution!(remote_targets, opts) do
+    cookie = String.to_atom(Keyword.get(opts, :cookie, "elx_cookie"))
+
+    if Node.alive?() do
+      Node.set_cookie(cookie)
+    else
+      epmd = Keyword.get(opts, :epmd, "127.0.0.1")
+      host_ip = Keyword.get(opts, :host_ip) || detect_host_ip()
+      node_label = Keyword.get(opts, :name, "host")
+      dist_port = Keyword.get(opts, :dist_port, 9101)
+
+      System.put_env("ERL_EPMD_ADDRESS", epmd)
+      :application.set_env(:kernel, :inet_dist_listen_min, dist_port)
+      :application.set_env(:kernel, :inet_dist_listen_max, dist_port)
+
+      node_name = String.to_atom("#{node_label}@#{host_ip}")
+
+      case Node.start(node_name, :longnames) do
+        {:ok, _pid} ->
+          :ok
+
+        {:error, {:already_started, _pid}} ->
+          :ok
+
+        {:error, reason} ->
+          Mix.raise("Could not start distributed node #{node_name}: #{inspect(reason)}")
+      end
+
+      Node.set_cookie(cookie)
+
+      Mix.shell().info("Distributed host node started as #{Node.self()}")
+      Mix.shell().info("Using EPMD #{epmd} with distribution port #{dist_port}")
+    end
+
+    Mix.shell().info("Target remotes: #{Enum.map_join(remote_targets, ", ", &to_string/1)}")
+  end
+
+  defp connect_remote_targets!([]), do: :ok
+
+  defp connect_remote_targets!(nodes) do
+    Enum.each(nodes, fn node ->
+      case Node.ping(node) do
+        :pong -> Mix.shell().info("Connected to #{node}")
+        :pang -> Mix.raise("Could not connect to remote node #{node}")
+      end
+    end)
+  end
+
+  defp detect_host_ip do
+    with {:ok, ifaddrs} <- :inet.getifaddrs(),
+         ip when not is_nil(ip) <- first_non_loopback_ipv4(ifaddrs) do
+      ip
+      |> :inet.ntoa()
+      |> to_string()
+    else
+      _ -> "127.0.0.1"
+    end
+  end
+
+  defp first_non_loopback_ipv4(ifaddrs) do
+    Enum.find_value(ifaddrs, fn {_iface, attrs} ->
+      flags = Keyword.get(attrs, :flags, [])
+
+      if :up in flags do
+        attrs
+        |> Enum.filter(fn
+          {:addr, ip} -> is_tuple(ip) and tuple_size(ip) == 4
+          _ -> false
+        end)
+        |> Enum.map(fn {:addr, ip} -> ip end)
+        |> Enum.find(fn {a, _, _, _} = ip ->
+          ip != {127, 0, 0, 1} and a != 127
+        end)
+      else
+        nil
+      end
+    end)
+  end
+
+  defp target_label(nil), do: if(Node.alive?(), do: to_string(Node.self()), else: "local")
+  defp target_label(node), do: to_string(node)
+
+  defp required!(opts, key, flag) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} -> value
+      :error -> Mix.raise("Missing required option #{flag}")
+    end
+  end
+
+  defp validate_invalid!([]), do: :ok
+
+  defp validate_invalid!(invalid) do
+    Mix.raise("Invalid options: #{Enum.map_join(invalid, ", ", &inspect/1)}")
+  end
+end

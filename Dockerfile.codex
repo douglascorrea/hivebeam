@@ -1,14 +1,18 @@
-FROM node:20-bookworm-slim
+FROM elixir:1.19-otp-27
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates npm \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @openai/codex \
+    && npm install -g @openai/codex @zed-industries/codex-acp \
+    && useradd --create-home --shell /bin/bash node \
     && mkdir -p /home/node/.codex \
-    && chown -R node:node /home/node/.codex
+    && mkdir -p /workspace \
+    && chown -R node:node /home/node/.codex /workspace
 
 USER node
 
 WORKDIR /workspace
 
-CMD ["sleep", "infinity"]
+RUN mix local.hex --force && mix local.rebar --force
+
+CMD ["mix", "codex.bridge.run"]

@@ -6,13 +6,28 @@ services:
     container_name: codex-node
     user: node
     working_dir: /workspace
+    environment:
+      ELX_NODE_NAME: ${ELX_NODE_NAME:-codex@localhost}
+      ELX_COOKIE: ${ELX_COOKIE:-elx_cookie}
+      ELX_CLUSTER_NODES: ${ELX_CLUSTER_NODES:-}
+      ELX_ERL_DIST_PORT: ${ELX_ERL_DIST_PORT:-9100}
+      ELX_BIND_IP: ${ELX_BIND_IP:-0.0.0.0}
+      ELX_CODEX_ACP_CMD: ${ELX_CODEX_ACP_CMD:-codex-acp}
+      MIX_NO_INTERACTION: "1"
     volumes:
       - .:/workspace
       - codex-config:/home/node/.codex
     ports:
+      - "${ELX_BIND_IP:-0.0.0.0}:4369:4369"
+      - "${ELX_BIND_IP:-0.0.0.0}:${ELX_ERL_DIST_PORT:-9100}:${ELX_ERL_DIST_PORT:-9100}"
       - "1455:1455"
+      - "5051:5051"
     tty: true
     stdin_open: true
+    command:
+      - sh
+      - -lc
+      - mix deps.get && mix compile && ERL_AFLAGS="-name ${ELX_NODE_NAME:-codex@localhost} -setcookie ${ELX_COOKIE:-elx_cookie} -kernel inet_dist_listen_min ${ELX_ERL_DIST_PORT:-9100} inet_dist_listen_max ${ELX_ERL_DIST_PORT:-9100}" mix codex.bridge.run
 
 volumes:
   codex-config:

@@ -1,21 +1,157 @@
 # ElxDockerNode
 
-**TODO: Add description**
+This project contains two communication paths:
 
-## Installation
+- **TCP demo path**: simple host/container message exchange (`mix node.listen`, `mix node.send`)
+- **Distributed ACP path**: long-lived Codex bridge using ACPex + distributed Erlang
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `elx_docker_node` to your list of dependencies in `mix.exs`:
+## TCP demo
 
-```elixir
-def deps do
-  [
-    {:elx_docker_node, "~> 0.1.0"}
-  ]
-end
+1. Build and start container:
+
+```bash
+docker compose up -d --build
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/elx_docker_node>.
+2. Start a local listener:
 
+```bash
+mix node.listen --name local --port 5050
+```
+
+3. Start container listener:
+
+```bash
+docker compose exec codex-node mix node.listen --name docker --port 5051
+```
+
+4. Send host -> container:
+
+```bash
+mix node.send --host 127.0.0.1 --port 5051 --from local --message "hello from host"
+```
+
+5. Send container -> host:
+
+```bash
+docker compose exec codex-node mix node.send --host host.docker.internal --port 5050 --from docker --message "hello from docker"
+```
+
+## Distributed ACP bridge
+
+### What it does
+
+- Each node runs a local `codex-acp` subprocess over stdio.
+- `ElxDockerNode.CodexBridge` keeps one long-lived ACP session.
+- Cross-node prompt calls use `:erpc`.
+- Prompt calls can stream thought/message/tool updates in real time.
+- Agent tool operations (`fs/*`, `terminal/*`) are enabled and can request approval.
+
+### Docker node startup (auto)
+
+`docker-compose.yml` auto-starts `mix codex.bridge.run`.
+
+Defaults:
+
+- node name: `codex@localhost`
+- cookie: `elx_cookie`
+- distribution port: `9100`
+- bind IP for exposed dist ports: `0.0.0.0` (`ELX_BIND_IP`)
+- ACP command: `codex-acp`
+
+Bring it up:
+
+```bash
+docker compose up -d --build
+```
+
+### Host + Docker on same machine
+
+When both nodes run on one machine, bind Docker distribution ports to your LAN IP to avoid local `epmd` conflicts.
+
+```bash
+LAN_IP=$(ipconfig getifaddr en0)
+ELX_BIND_IP=$LAN_IP ELX_NODE_NAME=codex@$LAN_IP docker compose up -d --build
+```
+
+Compile once on host:
+
+```bash
+mix deps.get && mix compile
+```
+
+### Realtime prompt/chat task (recommended)
+
+Use `mix codex.live` so you do not need manual `ERL_AFLAGS` / `ERL_EPMD_ADDRESS` exports.
+
+Local one-shot prompt:
+
+```bash
+mix codex.live --message "Reply with exactly HELLO"
+```
+
+Remote one-shot prompt (same machine host -> container, no env vars):
+
+```bash
+mix codex.live --remote-self --message "What was hardest to find?"
+```
+
+Realtime chat with one remote:
+
+```bash
+mix codex.live --remote-self --chat
+```
+
+Broadcast one prompt to local + multiple remotes:
+
+```bash
+mix codex.live --local --node codex@10.0.0.20 --node codex@10.0.0.30 --message "Status check"
+```
+
+Approval policy:
+
+```bash
+mix codex.live --remote-self --chat --approve ask
+```
+
+`--approve` supports: `ask` (default), `allow`, `deny`.
+
+### Legacy prompt/status tasks
+
+`mix codex.prompt` now also streams thought/tool updates and supports approvals.
+
+Local prompt:
+
+```bash
+mix codex.prompt --message "Reply with exactly HELLO"
+```
+
+Remote prompt:
+
+```bash
+mix codex.prompt --node codex@10.0.0.20 --message "Reply with exactly REMOTE_HELLO"
+```
+
+Status:
+
+```bash
+mix codex.status
+mix codex.status --node codex@10.0.0.20
+```
+
+### Troubleshooting
+
+- **Cookie mismatch**: ensure all nodes use same cookie.
+- **Node unreachable**: verify `4369` and distribution ports are open/mapped.
+- **Bridge degraded**: check `mix codex.status` and `last_error`.
+- **No Codex auth**: ensure `~/.codex/auth.json` exists on the node running `codex-acp`.
+
+## Mix tasks
+
+- `mix codex.bridge.run`
+- `mix codex.live --message "..."`
+- `mix codex.live --chat`
+- `mix codex.prompt --message "..."`
+- `mix codex.prompt --node <node@host> --message "..."`
+- `mix codex.status`
+- `mix codex.status --node <node@host>`
