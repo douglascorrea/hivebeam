@@ -2,6 +2,8 @@ defmodule ElxDockerNode.CodexAcpClient do
   @moduledoc false
   @behaviour ACPex.Client
 
+  require Logger
+
   alias ACPex.Schema.Client.{FsReadTextFileRequest, FsReadTextFileResponse}
   alias ACPex.Schema.Client.{FsWriteTextFileRequest, FsWriteTextFileResponse}
   alias ACPex.Schema.Client.Terminal.{CreateRequest, CreateResponse}
@@ -10,6 +12,7 @@ defmodule ElxDockerNode.CodexAcpClient do
   alias ACPex.Schema.Client.Terminal.{ReleaseRequest, ReleaseResponse}
   alias ACPex.Schema.Client.Terminal.{WaitForExitRequest, WaitForExitResponse}
   alias ACPex.Schema.Session.UpdateNotification
+  alias ElxDockerNode.AcpRequestPermissionResponse
   alias ElxDockerNode.CodexBridge
 
   @default_approval_timeout_ms 120_000
@@ -33,6 +36,40 @@ defmodule ElxDockerNode.CodexAcpClient do
   def handle_session_update(%UpdateNotification{} = notification, state) do
     send(state.bridge, {:acp_session_update, notification})
     {:noreply, state}
+  end
+
+  # ACP v0.9+ permission requests for tool executions and similar actions.
+  # We bridge this into our existing approval flow and map the yes/no decision
+  # to one of the option IDs provided by the agent.
+  def handle_session_request_permission(request, state) when is_map(request) do
+    state = drain_terminal_messages(state)
+    options = permission_options(request)
+
+    details = %{
+      session_id: fetch(request, :session_id) || fetch(request, :sessionId),
+      tool_call: fetch(request, :tool_call) || fetch(request, :toolCall),
+      options: options
+    }
+
+    outcome =
+      case approval_decision(state, "session/request_permission", details) do
+        :allow ->
+          case choose_option_id(options, :allow) do
+            nil -> cancelled_permission_outcome()
+            option_id -> selected_permission_outcome(option_id)
+          end
+
+        :deny ->
+          case choose_option_id(options, :deny) do
+            nil -> cancelled_permission_outcome()
+            option_id -> selected_permission_outcome(option_id)
+          end
+
+        :cancelled ->
+          cancelled_permission_outcome()
+      end
+
+    {:ok, %AcpRequestPermissionResponse{outcome: outcome}, state}
   end
 
   @impl true
@@ -200,31 +237,177 @@ defmodule ElxDockerNode.CodexAcpClient do
   end
 
   defp ensure_approved(state, operation, details) do
+    case approval_decision(state, operation, details) do
+      :allow ->
+        :ok
+
+      :deny ->
+        {:error, %{code: -32003, message: "#{operation} denied by approval policy"}}
+
+      :cancelled ->
+        {:error, %{code: -32003, message: "#{operation} approval cancelled"}}
+    end
+  end
+
+  defp approval_decision(state, operation, details) do
     request = %{operation: operation, details: details}
 
     case state.approval_fun.(request, state) do
       {:ok, true} ->
-        :ok
+        :allow
 
       {:ok, false} ->
-        {:error, %{code: -32003, message: "#{operation} denied by approval policy"}}
+        :deny
 
       {:error, reason} ->
-        {:error, %{code: -32003, message: "#{operation} approval failed: #{inspect(reason)}"}}
+        Logger.warning("#{operation} approval failed: #{inspect(reason)}")
+        :cancelled
 
       true ->
-        :ok
+        :allow
 
       false ->
-        {:error, %{code: -32003, message: "#{operation} denied by approval policy"}}
+        :deny
 
       other ->
-        {:error,
-         %{
-           code: -32003,
-           message: "#{operation} approval handler returned unexpected result: #{inspect(other)}"
-         }}
+        Logger.warning(
+          "#{operation} approval handler returned unexpected result: #{inspect(other)}"
+        )
+
+        :cancelled
     end
+  end
+
+  defp permission_options(request) do
+    request
+    |> fetch(:options)
+    |> List.wrap()
+    |> Enum.reduce([], fn option, acc ->
+      option_id = fetch(option, :option_id) || fetch(option, :optionId)
+
+      if is_binary(option_id) and option_id != "" do
+        option_name = fetch(option, :name)
+
+        normalized = %{
+          "optionId" => option_id,
+          "name" =>
+            if(is_binary(option_name) and option_name != "", do: option_name, else: option_id),
+          "kind" => normalize_option_kind(fetch(option, :kind))
+        }
+
+        [normalized | acc]
+      else
+        acc
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp normalize_option_kind(kind) when is_binary(kind), do: kind
+  defp normalize_option_kind(kind) when is_atom(kind), do: Atom.to_string(kind)
+  defp normalize_option_kind(_), do: nil
+
+  defp choose_option_id(options, :allow) do
+    preferred_option_id(options, [
+      &allow_once_kind?/1,
+      &allow_once_label?/1,
+      &allow_kind?/1,
+      &allow_label?/1
+    ]) || first_non_reject_option_id(options) || first_option_id(options)
+  end
+
+  defp choose_option_id(options, :deny) do
+    preferred_option_id(options, [
+      &reject_once_kind?/1,
+      &reject_label?/1,
+      &reject_kind?/1
+    ])
+  end
+
+  defp preferred_option_id(options, predicates) when is_list(predicates) do
+    Enum.find_value(predicates, fn predicate ->
+      options
+      |> Enum.find(predicate)
+      |> option_id()
+    end)
+  end
+
+  defp first_non_reject_option_id(options) do
+    options
+    |> Enum.reject(&reject_label?/1)
+    |> first_option_id()
+  end
+
+  defp first_option_id([%{"optionId" => option_id} | _]) when is_binary(option_id), do: option_id
+  defp first_option_id(_), do: nil
+
+  defp option_id(%{"optionId" => option_id}) when is_binary(option_id), do: option_id
+  defp option_id(_), do: nil
+
+  defp allow_once_kind?(option), do: option_kind(option) in ["allow_once", "approved"]
+  defp allow_kind?(option), do: option_kind(option) in ["allow_always", "approved-for-session"]
+  defp reject_once_kind?(option), do: option_kind(option) in ["reject_once", "abort"]
+  defp reject_kind?(option), do: option_kind(option) in ["reject_always", "cancelled"]
+
+  defp allow_once_label?(option) do
+    label = option_label(option)
+    allow_label_text?(label) and not persistent_label_text?(label)
+  end
+
+  defp allow_label?(option) do
+    option
+    |> option_label()
+    |> allow_label_text?()
+  end
+
+  defp reject_label?(option) do
+    option
+    |> option_label()
+    |> reject_label_text?()
+  end
+
+  defp option_kind(option) do
+    option
+    |> fetch(:kind)
+    |> normalize_label()
+  end
+
+  defp option_label(option) do
+    [fetch(option, :name), Map.get(option, "optionId"), fetch(option, :option_id)]
+    |> Enum.find(&(is_binary(&1) and &1 != ""))
+    |> normalize_label()
+  end
+
+  defp normalize_label(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.trim()
+  end
+
+  defp normalize_label(_), do: ""
+
+  defp allow_label_text?(label) when is_binary(label) do
+    label =~ "allow" or label =~ "approve" or label =~ "approved" or label == "yes"
+  end
+
+  defp reject_label_text?(label) when is_binary(label) do
+    label =~ "reject" or label =~ "deny" or label =~ "abort" or label =~ "cancel" or
+      String.starts_with?(label, "no")
+  end
+
+  defp persistent_label_text?(label) when is_binary(label) do
+    label =~ "always" or label =~ "session"
+  end
+
+  defp selected_permission_outcome(option_id) do
+    %{
+      "outcome" => "selected",
+      "optionId" => option_id
+    }
+  end
+
+  defp cancelled_permission_outcome do
+    %{"outcome" => "cancelled"}
   end
 
   defp ensure_parent_dir(path) do
@@ -476,4 +659,10 @@ defmodule ElxDockerNode.CodexAcpClient do
   defp io_error(message, reason) do
     %{code: -32001, message: "#{message}: #{inspect(reason)}"}
   end
+
+  defp fetch(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp fetch(_map, _key), do: nil
 end

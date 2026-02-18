@@ -105,6 +105,11 @@ defmodule ElxDockerNode.Test.FakeConnection do
     ElxDockerNode.Test.FakeAcpStore.add_call({method, params})
     %{"error" => %{"code" => -32000, "message" => "unexpected method"}}
   end
+
+  def send_notification(_conn_pid, method, params) do
+    ElxDockerNode.Test.FakeAcpStore.add_call({method, params})
+    :ok
+  end
 end
 
 defmodule ElxDockerNode.Test.FakeBlockingConnection do
@@ -129,6 +134,21 @@ defmodule ElxDockerNode.Test.FakeBlockingConnection do
     end
 
     %{"result" => %{"stopReason" => "end_turn"}}
+  end
+
+  def send_notification(_conn_pid, "session/cancel", params) do
+    ElxDockerNode.Test.FakeAcpStore.add_call({:session_cancel, params})
+
+    if prompt_task_pid = ElxDockerNode.Test.FakeAcpStore.prompt_task_pid() do
+      send(prompt_task_pid, :continue_prompt)
+    end
+
+    :ok
+  end
+
+  def send_notification(_conn_pid, method, params) do
+    ElxDockerNode.Test.FakeAcpStore.add_call({method, params})
+    :ok
   end
 end
 
@@ -272,6 +292,69 @@ defmodule ElxDockerNode.CodexBridgeTest do
     assert {:ok, _result} = Task.await(prompt_task)
   end
 
+  test "cancel_prompt sends session/cancel and unblocks in-flight prompt" do
+    bridge_name = :"codex_bridge_#{System.unique_integer([:positive])}"
+
+    {:ok, bridge_pid} =
+      CodexBridge.start_link(
+        name: bridge_name,
+        acpex_module: ElxDockerNode.Test.FakeACPex,
+        connection_module: ElxDockerNode.Test.FakeBlockingConnection,
+        config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20}
+      )
+
+    on_exit(fn -> safe_stop(bridge_pid) end)
+
+    wait_until(fn ->
+      {:ok, status} = CodexBridge.status(bridge_name)
+      status.connected
+    end)
+
+    prompt_task =
+      Task.async(fn ->
+        CodexBridge.prompt("long running prompt",
+          bridge_name: bridge_name,
+          timeout: 5_000,
+          stream_to: self()
+        )
+      end)
+
+    wait_until(fn ->
+      {:ok, status} = CodexBridge.status(bridge_name)
+      status.in_flight_prompt and is_pid(ElxDockerNode.Test.FakeAcpStore.prompt_task_pid())
+    end)
+
+    assert :ok = CodexBridge.cancel_prompt(bridge_name: bridge_name)
+    assert {:ok, _result} = Task.await(prompt_task)
+
+    assert {:session_cancel, %{"sessionId" => "session-test"}} =
+             Enum.find(ElxDockerNode.Test.FakeAcpStore.calls(), fn
+               {:session_cancel, _params} -> true
+               _ -> false
+             end)
+  end
+
+  test "cancel_prompt returns error when no prompt is running" do
+    bridge_name = :"codex_bridge_#{System.unique_integer([:positive])}"
+
+    {:ok, bridge_pid} =
+      CodexBridge.start_link(
+        name: bridge_name,
+        acpex_module: ElxDockerNode.Test.FakeACPex,
+        connection_module: ElxDockerNode.Test.FakeConnection,
+        config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20}
+      )
+
+    on_exit(fn -> safe_stop(bridge_pid) end)
+
+    wait_until(fn ->
+      {:ok, status} = CodexBridge.status(bridge_name)
+      status.connected
+    end)
+
+    assert {:error, :no_prompt_in_progress} = CodexBridge.cancel_prompt(bridge_name: bridge_name)
+  end
+
   test "reconnects after connection process dies" do
     bridge_name = :"codex_bridge_#{System.unique_integer([:positive])}"
 
@@ -315,12 +398,12 @@ defmodule ElxDockerNode.CodexBridgeTest do
   end
 
   defp safe_stop(pid) do
-    if Process.alive?(pid) do
-      try do
-        GenServer.stop(pid)
-      catch
-        :exit, _reason -> :ok
-      end
+    try do
+      GenServer.stop(pid)
+    rescue
+      _ -> :ok
+    catch
+      :exit, _reason -> :ok
     end
   end
 end

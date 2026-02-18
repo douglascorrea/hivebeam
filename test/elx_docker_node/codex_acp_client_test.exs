@@ -15,6 +15,7 @@ defmodule ElxDockerNode.CodexAcpClientTest do
   alias ACPex.Schema.Client.Terminal.WaitForExitResponse
   alias ACPex.Schema.Client.Terminal.WaitForExitRequest
   alias ACPex.Schema.Session.UpdateNotification
+  alias ElxDockerNode.AcpRequestPermissionResponse
   alias ElxDockerNode.CodexAcpClient
 
   test "forwards session updates to the bridge process" do
@@ -127,6 +128,118 @@ defmodule ElxDockerNode.CodexAcpClientTest do
                %KillRequest{session_id: "s1", terminal_id: "missing"},
                state
              )
+  end
+
+  test "maps session/request_permission approval to selected allow option" do
+    assert {:ok, state} =
+             CodexAcpClient.init(
+               bridge: self(),
+               approval_fun: fn _request, _state -> {:ok, true} end
+             )
+
+    request = %{
+      "sessionId" => "s1",
+      "toolCall" => %{"toolCallId" => "tool-1", "title" => "Read file", "status" => "pending"},
+      "options" => [
+        %{"optionId" => "approved", "name" => "Yes", "kind" => "allow_once"},
+        %{"optionId" => "abort", "name" => "No", "kind" => "reject_once"}
+      ]
+    }
+
+    assert {:ok,
+            %AcpRequestPermissionResponse{
+              outcome: %{"outcome" => "selected", "optionId" => "approved"}
+            }, _state} = CodexAcpClient.handle_session_request_permission(request, state)
+  end
+
+  test "maps session/request_permission denial to selected reject option" do
+    assert {:ok, state} =
+             CodexAcpClient.init(
+               bridge: self(),
+               approval_fun: fn _request, _state -> {:ok, false} end
+             )
+
+    request = %{
+      "sessionId" => "s1",
+      "toolCall" => %{"toolCallId" => "tool-1", "title" => "Run command", "status" => "pending"},
+      "options" => [
+        %{"optionId" => "approved", "name" => "Yes", "kind" => "allow_once"},
+        %{"optionId" => "abort", "name" => "No", "kind" => "reject_once"}
+      ]
+    }
+
+    assert {:ok,
+            %AcpRequestPermissionResponse{
+              outcome: %{"outcome" => "selected", "optionId" => "abort"}
+            }, _state} = CodexAcpClient.handle_session_request_permission(request, state)
+  end
+
+  test "returns cancelled permission outcome when no reject option exists" do
+    assert {:ok, state} =
+             CodexAcpClient.init(
+               bridge: self(),
+               approval_fun: fn _request, _state -> {:ok, false} end
+             )
+
+    request = %{
+      "sessionId" => "s1",
+      "toolCall" => %{"toolCallId" => "tool-1", "title" => "Run command", "status" => "pending"},
+      "options" => [
+        %{"optionId" => "approved", "name" => "Yes", "kind" => "allow_once"}
+      ]
+    }
+
+    assert {:ok, %AcpRequestPermissionResponse{outcome: %{"outcome" => "cancelled"}}, _state} =
+             CodexAcpClient.handle_session_request_permission(request, state)
+  end
+
+  test "prefers one-time approval option over session-wide option when both are available" do
+    assert {:ok, state} =
+             CodexAcpClient.init(
+               bridge: self(),
+               approval_fun: fn _request, _state -> {:ok, true} end
+             )
+
+    request = %{
+      "sessionId" => "s1",
+      "toolCall" => %{"toolCallId" => "tool-1", "title" => "List files", "status" => "pending"},
+      "options" => [
+        %{
+          "optionId" => "approved-for-session",
+          "name" => "Always",
+          "kind" => "approved-for-session"
+        },
+        %{"optionId" => "approved", "name" => "Yes", "kind" => "approved"},
+        %{"optionId" => "abort", "name" => "No", "kind" => "abort"}
+      ]
+    }
+
+    assert {:ok,
+            %AcpRequestPermissionResponse{
+              outcome: %{"outcome" => "selected", "optionId" => "approved"}
+            }, _state} = CodexAcpClient.handle_session_request_permission(request, state)
+  end
+
+  test "maps denial to abort option when reject kind is not provided" do
+    assert {:ok, state} =
+             CodexAcpClient.init(
+               bridge: self(),
+               approval_fun: fn _request, _state -> {:ok, false} end
+             )
+
+    request = %{
+      "sessionId" => "s1",
+      "toolCall" => %{"toolCallId" => "tool-1", "title" => "List files", "status" => "pending"},
+      "options" => [
+        %{"optionId" => "approved", "name" => "Yes"},
+        %{"optionId" => "abort", "name" => "No, provide feedback"}
+      ]
+    }
+
+    assert {:ok,
+            %AcpRequestPermissionResponse{
+              outcome: %{"outcome" => "selected", "optionId" => "abort"}
+            }, _state} = CodexAcpClient.handle_session_request_permission(request, state)
   end
 
   defp unique_tmp_dir(prefix) do

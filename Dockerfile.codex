@@ -6,8 +6,10 @@ RUN apt-get update \
     && npm install -g @openai/codex @zed-industries/codex-acp \
     && useradd --create-home --shell /bin/bash node \
     && mkdir -p /home/node/.codex \
+    && mkdir -p /home/node/.mix_build \
+    && mkdir -p /home/node/.mix_deps \
     && mkdir -p /workspace \
-    && chown -R node:node /home/node/.codex /workspace
+    && chown -R node:node /home/node/.codex /home/node/.mix_build /home/node/.mix_deps /workspace
 
 USER node
 

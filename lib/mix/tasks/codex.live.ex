@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.Codex.Live do
   use Mix.Task
 
-  alias ElxDockerNode.Codex
+  alias ElxDockerNode.CodexChatUi
   alias ElxDockerNode.CodexCli
 
   @shortdoc "Realtime local/remote Codex prompts and chat with auto node setup"
@@ -67,54 +67,12 @@ defmodule Mix.Tasks.Codex.Live do
   end
 
   defp run_chat(targets, prompt_opts, first_message) do
-    Mix.shell().info("Chat mode enabled. Commands: /targets, /use <n>, /status, /exit")
-    active_index = 0
-
-    active_index =
-      if is_binary(first_message) and String.trim(first_message) != "" do
-        run_prompt!(Enum.at(targets, active_index), first_message, prompt_opts)
-        active_index
-      else
-        active_index
-      end
-
-    chat_loop(targets, active_index, prompt_opts)
-  end
-
-  defp chat_loop(targets, active_index, prompt_opts) do
-    target = Enum.at(targets, active_index)
-    label = target_label(target)
-
-    case IO.gets("[#{label}] you> ") do
-      nil ->
+    case CodexChatUi.run(targets, prompt_opts, first_message) do
+      {:ok, _result} ->
         :ok
 
-      raw_line ->
-        line = String.trim(raw_line)
-
-        cond do
-          line == "" ->
-            chat_loop(targets, active_index, prompt_opts)
-
-          line in ["/exit", "exit", "quit", ":q"] ->
-            :ok
-
-          line == "/targets" ->
-            print_targets(targets, active_index)
-            chat_loop(targets, active_index, prompt_opts)
-
-          String.starts_with?(line, "/use ") ->
-            next_index = parse_target_index(line, targets, active_index)
-            chat_loop(targets, next_index, prompt_opts)
-
-          line == "/status" ->
-            print_status(target)
-            chat_loop(targets, active_index, prompt_opts)
-
-          true ->
-            run_prompt!(target, line, prompt_opts)
-            chat_loop(targets, active_index, prompt_opts)
-        end
+      {:error, reason} ->
+        Mix.raise("Chat UI failed: #{inspect(reason)}")
     end
   end
 
@@ -128,45 +86,6 @@ defmodule Mix.Tasks.Codex.Live do
 
       {:error, reason} ->
         Mix.raise("Prompt failed for #{target_label(target)}: #{inspect(reason)}")
-    end
-  end
-
-  defp print_status(nil) do
-    case Codex.status(nil) do
-      {:ok, status} -> Mix.shell().info(inspect(status, pretty: true, limit: :infinity))
-      {:error, reason} -> Mix.shell().error("Could not fetch status: #{inspect(reason)}")
-    end
-  end
-
-  defp print_status(node) do
-    case Codex.status(node) do
-      {:ok, status} -> Mix.shell().info(inspect(status, pretty: true, limit: :infinity))
-      {:error, reason} -> Mix.shell().error("Could not fetch status: #{inspect(reason)}")
-    end
-  end
-
-  defp print_targets(targets, active_index) do
-    targets
-    |> Enum.with_index()
-    |> Enum.each(fn {target, index} ->
-      marker = if index == active_index, do: "*", else: " "
-      Mix.shell().info("#{marker} #{index + 1}. #{target_label(target)}")
-    end)
-  end
-
-  defp parse_target_index(line, targets, fallback_index) do
-    value =
-      line
-      |> String.replace_prefix("/use", "")
-      |> String.trim()
-
-    case Integer.parse(value) do
-      {idx, ""} when idx > 0 and idx <= length(targets) ->
-        idx - 1
-
-      _ ->
-        Mix.shell().error("Invalid target index: #{value}")
-        fallback_index
     end
   end
 

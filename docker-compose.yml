@@ -13,10 +13,14 @@ services:
       ELX_ERL_DIST_PORT: ${ELX_ERL_DIST_PORT:-9100}
       ELX_BIND_IP: ${ELX_BIND_IP:-0.0.0.0}
       ELX_CODEX_ACP_CMD: ${ELX_CODEX_ACP_CMD:-codex-acp}
+      MIX_BUILD_ROOT: /home/node/.mix_build
+      MIX_DEPS_PATH: /home/node/.mix_deps
       MIX_NO_INTERACTION: "1"
     volumes:
       - .:/workspace
       - codex-config:/home/node/.codex
+      - codex-mix-build:/home/node/.mix_build
+      - codex-mix-deps:/home/node/.mix_deps
     ports:
       - "${ELX_BIND_IP:-0.0.0.0}:4369:4369"
       - "${ELX_BIND_IP:-0.0.0.0}:${ELX_ERL_DIST_PORT:-9100}:${ELX_ERL_DIST_PORT:-9100}"
@@ -31,3 +35,5 @@ services:
 
 volumes:
   codex-config:
+  codex-mix-build:
+  codex-mix-deps:

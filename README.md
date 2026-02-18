@@ -102,6 +102,23 @@ Realtime chat with one remote:
 mix codex.live --remote-self --chat
 ```
 
+`--chat` now uses a full-screen `term_ui` interface with live streaming output.
+Tool events are shown with inferred activity labels like `Exploring`, `Writing`, `Verifying`, and `Executing`.
+
+Controls:
+
+- `Enter`: send message
+- `Tab`: switch active target
+- `Ctrl+C`: exit chat
+- `/targets`: list targets
+- `/use <n>`: switch target by index
+- `/status`: fetch bridge status for active target
+- `/cancel`: request cancellation for the running prompt
+- `/help`: show commands
+- `/exit`: close chat
+
+If `/targets` shows `host@...`, you are talking to the local bridge. For Docker remote chat you should see `codex@<ip>`.
+
 Broadcast one prompt to local + multiple remotes:
 
 ```bash
@@ -145,6 +162,15 @@ mix codex.status --node codex@10.0.0.20
 - **Node unreachable**: verify `4369` and distribution ports are open/mapped.
 - **Bridge degraded**: check `mix codex.status` and `last_error`.
 - **No Codex auth**: ensure `~/.codex/auth.json` exists on the node running `codex-acp`.
+- **`Executable not found in PATH: codex-acp`**:
+  - local host bridge: install `codex-acp` locally (`npm i -g @zed-industries/codex-acp`) or target a remote Docker node instead.
+  - Docker remote: ensure container node name matches your host IP:
+
+```bash
+LAN_IP=$(ipconfig getifaddr en0)
+ELX_BIND_IP=$LAN_IP ELX_NODE_NAME=codex@$LAN_IP docker compose up -d --build
+mix codex.live --remote-self --chat
+```
 
 ## Mix tasks
 

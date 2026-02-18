@@ -2,6 +2,7 @@ defmodule ElxDockerNode.CodexCli do
   @moduledoc false
 
   alias ElxDockerNode.Codex
+  alias ElxDockerNode.CodexStream
 
   @stream_poll_ms 50
 
@@ -109,22 +110,23 @@ defmodule ElxDockerNode.CodexCli do
   end
 
   defp render_update(update, node_name, state) when is_map(update) do
-    kind = update_kind(update)
+    kind = CodexStream.update_kind(update)
     node_label = node_name |> to_string()
 
     cond do
       kind == "agent_thought_chunk" and state.show_thoughts? ->
         update
-        |> extract_texts()
+        |> CodexStream.thought_chunks()
         |> Enum.each(fn chunk -> state.shell.info("[#{node_label} thought] #{chunk}") end)
 
       kind == "agent_message_chunk" ->
         update
-        |> extract_texts()
+        |> CodexStream.message_chunks()
         |> Enum.each(fn chunk -> state.shell.info("[#{node_label}] #{chunk}") end)
 
       kind in ["tool_call", "tool_call_update"] and state.show_tools? ->
-        state.shell.info("[#{node_label} tool] #{tool_summary(update)}")
+        activity = CodexStream.tool_activity(update)
+        state.shell.info("[#{node_label} tool] #{activity}: #{CodexStream.tool_summary(update)}")
 
       true ->
         :ok
@@ -163,60 +165,6 @@ defmodule ElxDockerNode.CodexCli do
       end
 
     "Approve #{operation} on #{node_name}?#{summary}"
-  end
-
-  defp tool_summary(update) do
-    title = fetch(update, :title) || "tool"
-    kind = fetch(update, :kind)
-    status = fetch(update, :status)
-
-    parts =
-      [
-        to_string(title),
-        if(is_binary(kind), do: "kind=#{kind}"),
-        if(is_binary(status), do: "status=#{status}")
-      ]
-      |> Enum.reject(&is_nil/1)
-
-    Enum.join(parts, " ")
-  end
-
-  defp extract_texts(update) do
-    [
-      get_in(update, ["content", "text"]),
-      get_in(update, [:content, :text]),
-      get_in(update, ["content", "thought"]),
-      get_in(update, [:content, :thought]),
-      get_in(update, ["text"]),
-      get_in(update, [:text]),
-      get_in(update, ["thought"]),
-      get_in(update, [:thought])
-    ]
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-    |> case do
-      [] ->
-        get_in(update, ["content", "content"])
-        |> normalize_content_texts()
-
-      chunks ->
-        chunks
-    end
-  end
-
-  defp normalize_content_texts(list) when is_list(list) do
-    list
-    |> Enum.map(fn item -> item["text"] || item[:text] end)
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-  end
-
-  defp normalize_content_texts(_), do: []
-
-  defp update_kind(update) do
-    fetch(update, :type) ||
-      fetch(update, :kind) ||
-      fetch(update, :sessionUpdate) ||
-      fetch(update, :session_update) ||
-      "unknown"
   end
 
   defp fetch(map, key) when is_map(map) and is_atom(key) do

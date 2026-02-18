@@ -5,6 +5,7 @@ defmodule ElxDockerNode.CodexBridge do
   require Logger
 
   alias ElxDockerNode.CodexConfig
+  alias ElxDockerNode.CodexStream
 
   @type status :: :connecting | :connected | :degraded
   @type approval_mode :: :ask | :allow | :deny
@@ -20,15 +21,27 @@ defmodule ElxDockerNode.CodexBridge do
   @spec prompt(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def prompt(prompt, opts \\ []) when is_binary(prompt) do
     bridge_name = Keyword.get(opts, :bridge_name, CodexConfig.bridge_name())
-    timeout_ms = Keyword.get(opts, :timeout, CodexConfig.prompt_timeout_ms()) + 5_000
+
+    timeout_ms =
+      normalize_timeout_ms(Keyword.get(opts, :timeout), CodexConfig.prompt_timeout_ms()) + 5_000
+
     GenServer.call(bridge_name, {:prompt, prompt, opts}, timeout_ms)
   end
 
   @spec request_tool_approval(map(), keyword()) :: {:ok, boolean()} | {:error, term()}
   def request_tool_approval(request, opts \\ []) when is_map(request) do
     bridge_name = Keyword.get(opts, :bridge_name, CodexConfig.bridge_name())
-    timeout_ms = Keyword.get(opts, :timeout, CodexConfig.prompt_timeout_ms())
+
+    timeout_ms =
+      normalize_timeout_ms(Keyword.get(opts, :timeout), CodexConfig.prompt_timeout_ms())
+
     GenServer.call(bridge_name, {:tool_approval, request}, timeout_ms)
+  end
+
+  @spec cancel_prompt(keyword()) :: :ok | {:error, term()}
+  def cancel_prompt(opts \\ []) do
+    bridge_name = Keyword.get(opts, :bridge_name, CodexConfig.bridge_name())
+    GenServer.call(bridge_name, :cancel_prompt)
   end
 
   @spec status() :: {:ok, map()}
@@ -115,6 +128,29 @@ defmodule ElxDockerNode.CodexBridge do
     {:reply, approve_tool_request(state, request), state}
   end
 
+  def handle_call(:cancel_prompt, _from, state) do
+    cond do
+      state.status != :connected or is_nil(state.conn_pid) or is_nil(state.session_id) ->
+        {:reply, {:error, {:bridge_not_connected, state.last_error}}, state}
+
+      state.in_flight_prompt == nil ->
+        {:reply, {:error, :no_prompt_in_progress}, state}
+
+      true ->
+        payload = %{"sessionId" => state.session_id}
+        state.connection_module.send_notification(state.conn_pid, "session/cancel", payload)
+
+        notify_prompt_stream(state, %{
+          event: :status,
+          node: Node.self(),
+          session_id: state.session_id,
+          message: "cancel_requested"
+        })
+
+        {:reply, :ok, state}
+    end
+  end
+
   def handle_call({:prompt, prompt, opts}, from, state) when is_binary(prompt) do
     cond do
       state.status != :connected or is_nil(state.conn_pid) or is_nil(state.session_id) ->
@@ -124,7 +160,7 @@ defmodule ElxDockerNode.CodexBridge do
         {:reply, {:error, :prompt_in_progress}, state}
 
       true ->
-        timeout_ms = Keyword.get(opts, :timeout, state.prompt_timeout_ms)
+        timeout_ms = normalize_timeout_ms(Keyword.get(opts, :timeout), state.prompt_timeout_ms)
         payload = prompt_payload(state.session_id, prompt)
 
         stream_targets = extract_stream_targets(opts)
@@ -257,14 +293,14 @@ defmodule ElxDockerNode.CodexBridge do
   end
 
   defp collect_update(updates, update) do
-    kind = update_kind(update)
+    kind = stream_update_kind(update)
 
     cond do
       kind == "agent_thought_chunk" ->
-        %{updates | thought_chunks: updates.thought_chunks ++ extract_thought_chunks(update)}
+        %{updates | thought_chunks: updates.thought_chunks ++ stream_thought_chunks(update)}
 
       kind == "agent_message_chunk" ->
-        %{updates | message_chunks: updates.message_chunks ++ extract_message_chunks(update)}
+        %{updates | message_chunks: updates.message_chunks ++ stream_message_chunks(update)}
 
       kind in ["tool_call", "tool_call_update"] ->
         %{updates | tool_events: updates.tool_events ++ [update]}
@@ -274,7 +310,50 @@ defmodule ElxDockerNode.CodexBridge do
     end
   end
 
-  defp extract_thought_chunks(update) do
+  defp stream_update_kind(update) do
+    if Code.ensure_loaded?(CodexStream) and function_exported?(CodexStream, :update_kind, 1) do
+      CodexStream.update_kind(update)
+    else
+      fallback_update_kind(update)
+    end
+  rescue
+    _ ->
+      fallback_update_kind(update)
+  end
+
+  defp stream_message_chunks(update) do
+    if Code.ensure_loaded?(CodexStream) and function_exported?(CodexStream, :message_chunks, 1) do
+      CodexStream.message_chunks(update)
+    else
+      fallback_message_chunks(update)
+    end
+  rescue
+    _ ->
+      fallback_message_chunks(update)
+  end
+
+  defp stream_thought_chunks(update) do
+    if Code.ensure_loaded?(CodexStream) and function_exported?(CodexStream, :thought_chunks, 1) do
+      CodexStream.thought_chunks(update)
+    else
+      fallback_thought_chunks(update)
+    end
+  rescue
+    _ ->
+      fallback_thought_chunks(update)
+  end
+
+  defp fallback_message_chunks(update) do
+    [
+      get_in(update, ["content", "text"]),
+      get_in(update, [:content, :text]),
+      get_in(update, ["text"]),
+      get_in(update, [:text])
+    ]
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+  end
+
+  defp fallback_thought_chunks(update) do
     [
       get_in(update, ["content", "thought"]),
       get_in(update, [:content, :thought]),
@@ -286,51 +365,15 @@ defmodule ElxDockerNode.CodexBridge do
       get_in(update, [:text])
     ]
     |> Enum.filter(&(is_binary(&1) and &1 != ""))
-    |> case do
-      [] ->
-        get_in(update, ["content", "content"])
-        |> normalize_content_texts()
-
-      direct ->
-        direct
-    end
   end
 
-  defp extract_message_chunks(update) do
-    [
-      get_in(update, ["content", "text"]),
-      get_in(update, [:content, :text]),
-      get_in(update, ["text"]),
-      get_in(update, [:text])
-    ]
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-    |> case do
-      [] ->
-        get_in(update, ["content", "content"])
-        |> normalize_content_texts()
-
-      direct ->
-        direct
-    end
-  end
-
-  defp normalize_content_texts(list) when is_list(list) do
-    list
-    |> Enum.map(fn item ->
-      get_in(item, ["text"]) || get_in(item, [:text])
-    end)
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-  end
-
-  defp normalize_content_texts(_), do: []
-
-  defp update_kind(update) do
+  defp fallback_update_kind(update) do
     get_in(update, ["type"]) ||
       get_in(update, [:type]) ||
-      get_in(update, ["kind"]) ||
-      get_in(update, [:kind]) ||
       get_in(update, ["sessionUpdate"]) ||
       get_in(update, [:sessionUpdate]) ||
+      get_in(update, ["kind"]) ||
+      get_in(update, [:kind]) ||
       "unknown"
   end
 
@@ -615,4 +658,7 @@ defmodule ElxDockerNode.CodexBridge do
       other_updates: []
     }
   end
+
+  defp normalize_timeout_ms(value, _default) when is_integer(value) and value > 0, do: value
+  defp normalize_timeout_ms(_value, default), do: default
 end
