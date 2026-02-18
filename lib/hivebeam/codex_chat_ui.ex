@@ -1570,7 +1570,7 @@ defmodule Hivebeam.CodexChatUi do
   end
 
   defp apply_next_completion(state, context) do
-    target_key = completion_target_key(context.kind, state)
+    target_key = completion_target_key(context.kind, state, state.input)
 
     completion =
       if reuse_completion?(state.completion, context, target_key) do
@@ -1578,7 +1578,7 @@ defmodule Hivebeam.CodexChatUi do
         index = rem(previous.index + 1, length(previous.candidates))
         %{previous | index: index}
       else
-        candidates = completion_candidates(state, context)
+        candidates = completion_candidates(state, context, state.input)
 
         case candidates do
           [] ->
@@ -1626,7 +1626,7 @@ defmodule Hivebeam.CodexChatUi do
     end
   end
 
-  defp completion_candidates(state, %{kind: :mention, token: token}) do
+  defp completion_candidates(state, %{kind: :mention, token: token}, _input) do
     state.targets
     |> Enum.map(&target_mention/1)
     |> Enum.uniq()
@@ -1634,9 +1634,9 @@ defmodule Hivebeam.CodexChatUi do
     |> Enum.sort()
   end
 
-  defp completion_candidates(state, %{kind: :file, token: token, query: query}) do
-    active_target = Enum.at(state.targets, state.active_index)
-    node = active_target |> Map.get(:node)
+  defp completion_candidates(state, %{kind: :file, token: token, query: query}, input) do
+    target = completion_file_target(state, input)
+    node = target |> Map.get(:node)
 
     node
     |> FileCompletion.complete(query)
@@ -1645,13 +1645,24 @@ defmodule Hivebeam.CodexChatUi do
     |> Enum.sort()
   end
 
-  defp completion_candidates(_state, _context), do: []
+  defp completion_candidates(_state, _context, _input), do: []
 
-  defp completion_target_key(:mention, _state), do: :mention
+  defp completion_target_key(:mention, _state, _input), do: :mention
 
-  defp completion_target_key(:file, state) do
-    target = Enum.at(state.targets, state.active_index)
+  defp completion_target_key(:file, state, input) do
+    target = completion_file_target(state, input)
     {target.node_alias, target.provider_alias}
+  end
+
+  defp completion_file_target(state, input) do
+    active_target = Enum.at(state.targets, state.active_index)
+
+    with {:ok, {node_alias, provider_alias}, _message} <- parse_target_routing(input),
+         {:ok, target, _index} <- resolve_routed_target(state.targets, node_alias, provider_alias) do
+      target
+    else
+      _ -> active_target
+    end
   end
 
   defp reuse_completion?(nil, _context, _target_key), do: false

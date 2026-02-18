@@ -212,6 +212,23 @@ defmodule Hivebeam.CodexChatUiTest do
     assert state.input == "@lib/"
   end
 
+  test "tab autocompletes @file paths using routed %node+provider target" do
+    state =
+      CodexChatUi.init(
+        targets: [
+          %{node: nil, bridge_name: Hivebeam.CodexBridge},
+          %{node: :"codex@10.0.0.99", bridge_name: Hivebeam.CodexBridge}
+        ]
+      )
+
+    state = %{state | active_index: 1}
+
+    {state, []} = CodexChatUi.update({:insert, "%node1+codex @li"}, state)
+    {state, []} = CodexChatUi.update(:tab_pressed, state)
+
+    assert state.input == "%node1+codex @lib/"
+  end
+
   test "ignores ctrl+o keybinding" do
     assert :ignore == CodexChatUi.event_to_msg(%Event.Key{key: "o", modifiers: [:ctrl]}, %{})
   end
