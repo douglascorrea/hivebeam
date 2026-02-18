@@ -1,10 +1,10 @@
-defmodule ElxDockerNode.Codex do
+defmodule Hivebeam.Codex do
   @moduledoc """
   Public API for distributed Codex ACP bridge calls.
   """
 
-  alias ElxDockerNode.CodexBridge
-  alias ElxDockerNode.CodexConfig
+  alias Hivebeam.CodexBridge
+  alias Hivebeam.CodexConfig
 
   @spec prompt(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def prompt(prompt, opts \\ []) when is_binary(prompt) do

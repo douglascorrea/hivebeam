@@ -1,10 +1,10 @@
-defmodule ElxDockerNode.ClusterConnector do
+defmodule Hivebeam.ClusterConnector do
   @moduledoc false
   use GenServer
 
   require Logger
 
-  alias ElxDockerNode.CodexConfig
+  alias Hivebeam.CodexConfig
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do

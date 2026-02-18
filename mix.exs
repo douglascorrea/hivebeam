@@ -1,11 +1,11 @@
-defmodule ElxDockerNode.MixProject do
+defmodule Hivebeam.MixProject do
   use Mix.Project
 
   @version "0.1.0"
 
   def project do
     [
-      app: :elx_docker_node,
+      app: :hivebeam,
       version: @version,
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
@@ -16,7 +16,7 @@ defmodule ElxDockerNode.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      mod: {ElxDockerNode.Application, []},
+      mod: {Hivebeam.Application, []},
       extra_applications: [:logger]
     ]
   end

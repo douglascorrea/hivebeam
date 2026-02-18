@@ -1,4 +1,4 @@
-# ElxDockerNode
+# Hivebeam
 
 This project contains two communication paths:
 
@@ -42,7 +42,7 @@ docker compose exec codex-node mix node.send --host host.docker.internal --port 
 ### What it does
 
 - Each node runs a local `codex-acp` subprocess over stdio.
-- `ElxDockerNode.CodexBridge` keeps one long-lived ACP session.
+- `Hivebeam.CodexBridge` keeps one long-lived ACP session.
 - Cross-node prompt calls use `:erpc`.
 - Prompt calls can stream thought/message/tool updates in real time.
 - Agent tool operations (`fs/*`, `terminal/*`) are enabled and can request approval.

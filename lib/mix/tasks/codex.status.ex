@@ -14,8 +14,8 @@ defmodule Mix.Tasks.Codex.Status do
 
     response =
       case Keyword.get(opts, :node) do
-        nil -> ElxDockerNode.Codex.status(nil)
-        node_string -> ElxDockerNode.Codex.status(String.to_atom(node_string))
+        nil -> Hivebeam.Codex.status(nil)
+        node_string -> Hivebeam.Codex.status(String.to_atom(node_string))
       end
 
     case response do

@@ -1,4 +1,4 @@
-defmodule ElxDockerNode.CodexAcpClient do
+defmodule Hivebeam.CodexAcpClient do
   @moduledoc false
   @behaviour ACPex.Client
 
@@ -12,8 +12,8 @@ defmodule ElxDockerNode.CodexAcpClient do
   alias ACPex.Schema.Client.Terminal.{ReleaseRequest, ReleaseResponse}
   alias ACPex.Schema.Client.Terminal.{WaitForExitRequest, WaitForExitResponse}
   alias ACPex.Schema.Session.UpdateNotification
-  alias ElxDockerNode.AcpRequestPermissionResponse
-  alias ElxDockerNode.CodexBridge
+  alias Hivebeam.AcpRequestPermissionResponse
+  alias Hivebeam.CodexBridge
 
   @default_approval_timeout_ms 120_000
   @default_terminal_output_limit 200_000

@@ -1,4 +1,4 @@
-defmodule ElxDockerNode.Test.FakeAcpStore do
+defmodule Hivebeam.Test.FakeAcpStore do
   use Agent
 
   def start_link(_opts) do
@@ -38,10 +38,10 @@ defmodule ElxDockerNode.Test.FakeAcpStore do
   end
 end
 
-defmodule ElxDockerNode.Test.FakeACPex do
+defmodule Hivebeam.Test.FakeACPex do
   def start_client(_handler_module, handler_args, _opts) do
     bridge = Keyword.fetch!(handler_args, :bridge)
-    ElxDockerNode.Test.FakeAcpStore.put_bridge(bridge)
+    Hivebeam.Test.FakeAcpStore.put_bridge(bridge)
 
     conn_pid =
       spawn(fn ->
@@ -50,26 +50,26 @@ defmodule ElxDockerNode.Test.FakeACPex do
         end
       end)
 
-    ElxDockerNode.Test.FakeAcpStore.add_connection(conn_pid)
+    Hivebeam.Test.FakeAcpStore.add_connection(conn_pid)
     {:ok, conn_pid}
   end
 end
 
-defmodule ElxDockerNode.Test.FakeConnection do
+defmodule Hivebeam.Test.FakeConnection do
   def send_request(_conn_pid, "initialize", params, _timeout) do
-    ElxDockerNode.Test.FakeAcpStore.add_call({:initialize, params})
+    Hivebeam.Test.FakeAcpStore.add_call({:initialize, params})
     %{"result" => %{"protocolVersion" => 1}}
   end
 
   def send_request(_conn_pid, "session/new", params, _timeout) do
-    ElxDockerNode.Test.FakeAcpStore.add_call({:session_new, params})
+    Hivebeam.Test.FakeAcpStore.add_call({:session_new, params})
     %{"result" => %{"sessionId" => "session-test"}}
   end
 
   def send_request(_conn_pid, "session/prompt", params, _timeout) do
-    ElxDockerNode.Test.FakeAcpStore.add_call({:session_prompt, params})
+    Hivebeam.Test.FakeAcpStore.add_call({:session_prompt, params})
 
-    if bridge = ElxDockerNode.Test.FakeAcpStore.bridge() do
+    if bridge = Hivebeam.Test.FakeAcpStore.bridge() do
       send(
         bridge,
         {:acp_session_update,
@@ -102,30 +102,30 @@ defmodule ElxDockerNode.Test.FakeConnection do
   end
 
   def send_request(_conn_pid, method, params, _timeout) do
-    ElxDockerNode.Test.FakeAcpStore.add_call({method, params})
+    Hivebeam.Test.FakeAcpStore.add_call({method, params})
     %{"error" => %{"code" => -32000, "message" => "unexpected method"}}
   end
 
   def send_notification(_conn_pid, method, params) do
-    ElxDockerNode.Test.FakeAcpStore.add_call({method, params})
+    Hivebeam.Test.FakeAcpStore.add_call({method, params})
     :ok
   end
 end
 
-defmodule ElxDockerNode.Test.FakeBlockingConnection do
+defmodule Hivebeam.Test.FakeBlockingConnection do
   def send_request(_conn_pid, "initialize", params, _timeout) do
-    ElxDockerNode.Test.FakeAcpStore.add_call({:initialize, params})
+    Hivebeam.Test.FakeAcpStore.add_call({:initialize, params})
     %{"result" => %{"protocolVersion" => 1}}
   end
 
   def send_request(_conn_pid, "session/new", params, _timeout) do
-    ElxDockerNode.Test.FakeAcpStore.add_call({:session_new, params})
+    Hivebeam.Test.FakeAcpStore.add_call({:session_new, params})
     %{"result" => %{"sessionId" => "session-test"}}
   end
 
   def send_request(_conn_pid, "session/prompt", params, _timeout) do
-    ElxDockerNode.Test.FakeAcpStore.add_call({:session_prompt, params})
-    ElxDockerNode.Test.FakeAcpStore.set_prompt_task_pid(self())
+    Hivebeam.Test.FakeAcpStore.add_call({:session_prompt, params})
+    Hivebeam.Test.FakeAcpStore.set_prompt_task_pid(self())
 
     receive do
       :continue_prompt -> :ok
@@ -137,9 +137,9 @@ defmodule ElxDockerNode.Test.FakeBlockingConnection do
   end
 
   def send_notification(_conn_pid, "session/cancel", params) do
-    ElxDockerNode.Test.FakeAcpStore.add_call({:session_cancel, params})
+    Hivebeam.Test.FakeAcpStore.add_call({:session_cancel, params})
 
-    if prompt_task_pid = ElxDockerNode.Test.FakeAcpStore.prompt_task_pid() do
+    if prompt_task_pid = Hivebeam.Test.FakeAcpStore.prompt_task_pid() do
       send(prompt_task_pid, :continue_prompt)
     end
 
@@ -147,21 +147,21 @@ defmodule ElxDockerNode.Test.FakeBlockingConnection do
   end
 
   def send_notification(_conn_pid, method, params) do
-    ElxDockerNode.Test.FakeAcpStore.add_call({method, params})
+    Hivebeam.Test.FakeAcpStore.add_call({method, params})
     :ok
   end
 end
 
-defmodule ElxDockerNode.CodexBridgeTest do
+defmodule Hivebeam.CodexBridgeTest do
   use ExUnit.Case, async: false
 
-  alias ElxDockerNode.CodexBridge
+  alias Hivebeam.CodexBridge
 
   setup do
-    {:ok, _pid} = ElxDockerNode.Test.FakeAcpStore.start_link([])
+    {:ok, _pid} = Hivebeam.Test.FakeAcpStore.start_link([])
 
     on_exit(fn ->
-      ElxDockerNode.Test.FakeAcpStore.stop()
+      Hivebeam.Test.FakeAcpStore.stop()
     end)
 
     :ok
@@ -173,8 +173,8 @@ defmodule ElxDockerNode.CodexBridgeTest do
     {:ok, bridge_pid} =
       CodexBridge.start_link(
         name: bridge_name,
-        acpex_module: ElxDockerNode.Test.FakeACPex,
-        connection_module: ElxDockerNode.Test.FakeConnection,
+        acpex_module: Hivebeam.Test.FakeACPex,
+        connection_module: Hivebeam.Test.FakeConnection,
         config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20}
       )
 
@@ -190,7 +190,7 @@ defmodule ElxDockerNode.CodexBridgeTest do
     assert status.session_id == "session-test"
 
     assert {:initialize, initialize_payload} =
-             Enum.find(ElxDockerNode.Test.FakeAcpStore.calls(), fn {kind, _} ->
+             Enum.find(Hivebeam.Test.FakeAcpStore.calls(), fn {kind, _} ->
                kind == :initialize
              end)
 
@@ -204,8 +204,8 @@ defmodule ElxDockerNode.CodexBridgeTest do
     {:ok, bridge_pid} =
       CodexBridge.start_link(
         name: bridge_name,
-        acpex_module: ElxDockerNode.Test.FakeACPex,
-        connection_module: ElxDockerNode.Test.FakeConnection,
+        acpex_module: Hivebeam.Test.FakeACPex,
+        connection_module: Hivebeam.Test.FakeConnection,
         config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20}
       )
 
@@ -245,8 +245,8 @@ defmodule ElxDockerNode.CodexBridgeTest do
     {:ok, bridge_pid} =
       CodexBridge.start_link(
         name: bridge_name,
-        acpex_module: ElxDockerNode.Test.FakeACPex,
-        connection_module: ElxDockerNode.Test.FakeBlockingConnection,
+        acpex_module: Hivebeam.Test.FakeACPex,
+        connection_module: Hivebeam.Test.FakeBlockingConnection,
         config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20}
       )
 
@@ -271,7 +271,7 @@ defmodule ElxDockerNode.CodexBridgeTest do
 
     wait_until(fn ->
       {:ok, status} = CodexBridge.status(bridge_name)
-      status.in_flight_prompt and is_pid(ElxDockerNode.Test.FakeAcpStore.prompt_task_pid())
+      status.in_flight_prompt and is_pid(Hivebeam.Test.FakeAcpStore.prompt_task_pid())
     end)
 
     approval_task =
@@ -288,7 +288,7 @@ defmodule ElxDockerNode.CodexBridgeTest do
 
     assert {:ok, true} = Task.await(approval_task)
 
-    send(ElxDockerNode.Test.FakeAcpStore.prompt_task_pid(), :continue_prompt)
+    send(Hivebeam.Test.FakeAcpStore.prompt_task_pid(), :continue_prompt)
     assert {:ok, _result} = Task.await(prompt_task)
   end
 
@@ -298,8 +298,8 @@ defmodule ElxDockerNode.CodexBridgeTest do
     {:ok, bridge_pid} =
       CodexBridge.start_link(
         name: bridge_name,
-        acpex_module: ElxDockerNode.Test.FakeACPex,
-        connection_module: ElxDockerNode.Test.FakeBlockingConnection,
+        acpex_module: Hivebeam.Test.FakeACPex,
+        connection_module: Hivebeam.Test.FakeBlockingConnection,
         config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20}
       )
 
@@ -321,14 +321,14 @@ defmodule ElxDockerNode.CodexBridgeTest do
 
     wait_until(fn ->
       {:ok, status} = CodexBridge.status(bridge_name)
-      status.in_flight_prompt and is_pid(ElxDockerNode.Test.FakeAcpStore.prompt_task_pid())
+      status.in_flight_prompt and is_pid(Hivebeam.Test.FakeAcpStore.prompt_task_pid())
     end)
 
     assert :ok = CodexBridge.cancel_prompt(bridge_name: bridge_name)
     assert {:ok, _result} = Task.await(prompt_task)
 
     assert {:session_cancel, %{"sessionId" => "session-test"}} =
-             Enum.find(ElxDockerNode.Test.FakeAcpStore.calls(), fn
+             Enum.find(Hivebeam.Test.FakeAcpStore.calls(), fn
                {:session_cancel, _params} -> true
                _ -> false
              end)
@@ -340,8 +340,8 @@ defmodule ElxDockerNode.CodexBridgeTest do
     {:ok, bridge_pid} =
       CodexBridge.start_link(
         name: bridge_name,
-        acpex_module: ElxDockerNode.Test.FakeACPex,
-        connection_module: ElxDockerNode.Test.FakeConnection,
+        acpex_module: Hivebeam.Test.FakeACPex,
+        connection_module: Hivebeam.Test.FakeConnection,
         config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20}
       )
 
@@ -361,8 +361,8 @@ defmodule ElxDockerNode.CodexBridgeTest do
     {:ok, bridge_pid} =
       CodexBridge.start_link(
         name: bridge_name,
-        acpex_module: ElxDockerNode.Test.FakeACPex,
-        connection_module: ElxDockerNode.Test.FakeConnection,
+        acpex_module: Hivebeam.Test.FakeACPex,
+        connection_module: Hivebeam.Test.FakeConnection,
         config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20}
       )
 

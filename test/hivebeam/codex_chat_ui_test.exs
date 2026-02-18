@@ -1,7 +1,7 @@
-defmodule ElxDockerNode.CodexChatUiTest do
+defmodule Hivebeam.CodexChatUiTest do
   use ExUnit.Case, async: true
 
-  alias ElxDockerNode.CodexChatUi
+  alias Hivebeam.CodexChatUi
 
   test "keeps stream order when tool updates interleave with assistant chunks" do
     state =

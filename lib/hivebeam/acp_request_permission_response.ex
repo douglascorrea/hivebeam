@@ -1,4 +1,4 @@
-defmodule ElxDockerNode.AcpRequestPermissionResponse do
+defmodule Hivebeam.AcpRequestPermissionResponse do
   @moduledoc false
   use Ecto.Schema
 

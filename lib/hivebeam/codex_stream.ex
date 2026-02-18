@@ -1,4 +1,4 @@
-defmodule ElxDockerNode.CodexStream do
+defmodule Hivebeam.CodexStream do
   @moduledoc false
 
   @max_depth 8

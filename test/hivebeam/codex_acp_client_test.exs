@@ -1,4 +1,4 @@
-defmodule ElxDockerNode.CodexAcpClientTest do
+defmodule Hivebeam.CodexAcpClientTest do
   use ExUnit.Case, async: true
 
   alias ACPex.Schema.Client.FsReadTextFileRequest
@@ -15,8 +15,8 @@ defmodule ElxDockerNode.CodexAcpClientTest do
   alias ACPex.Schema.Client.Terminal.WaitForExitResponse
   alias ACPex.Schema.Client.Terminal.WaitForExitRequest
   alias ACPex.Schema.Session.UpdateNotification
-  alias ElxDockerNode.AcpRequestPermissionResponse
-  alias ElxDockerNode.CodexAcpClient
+  alias Hivebeam.AcpRequestPermissionResponse
+  alias Hivebeam.CodexAcpClient
 
   test "forwards session updates to the bridge process" do
     assert {:ok, state} = CodexAcpClient.init(bridge: self())

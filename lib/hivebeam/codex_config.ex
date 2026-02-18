@@ -1,11 +1,11 @@
-defmodule ElxDockerNode.CodexConfig do
+defmodule Hivebeam.CodexConfig do
   @moduledoc false
 
   @default_acp_command "codex-acp"
   @default_cluster_retry_ms 5_000
   @default_prompt_timeout_ms 120_000
   @default_connect_timeout_ms 30_000
-  @default_bridge_name ElxDockerNode.CodexBridge
+  @default_bridge_name Hivebeam.CodexBridge
 
   @spec acp_command() :: {:ok, {String.t(), [String.t()]}} | {:error, term()}
   def acp_command do

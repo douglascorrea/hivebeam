@@ -1,8 +1,8 @@
 defmodule Mix.Tasks.Codex.Live do
   use Mix.Task
 
-  alias ElxDockerNode.CodexChatUi
-  alias ElxDockerNode.CodexCli
+  alias Hivebeam.CodexChatUi
+  alias Hivebeam.CodexCli
 
   @shortdoc "Realtime local/remote Codex prompts and chat with auto node setup"
 

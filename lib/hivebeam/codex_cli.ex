@@ -1,8 +1,8 @@
-defmodule ElxDockerNode.CodexCli do
+defmodule Hivebeam.CodexCli do
   @moduledoc false
 
-  alias ElxDockerNode.Codex
-  alias ElxDockerNode.CodexStream
+  alias Hivebeam.Codex
+  alias Hivebeam.CodexStream
 
   @stream_poll_ms 50
 

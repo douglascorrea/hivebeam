@@ -1,7 +1,7 @@
-defmodule ElxDockerNode.ClusterConnectorTest do
+defmodule Hivebeam.ClusterConnectorTest do
   use ExUnit.Case, async: false
 
-  alias ElxDockerNode.ClusterConnector
+  alias Hivebeam.ClusterConnector
 
   test "stores configured peers" do
     name = :"cluster_connector_#{System.unique_integer([:positive])}"

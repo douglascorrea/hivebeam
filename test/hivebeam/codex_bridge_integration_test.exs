@@ -1,8 +1,8 @@
-defmodule ElxDockerNode.CodexBridgeIntegrationTest do
+defmodule Hivebeam.CodexBridgeIntegrationTest do
   use ExUnit.Case, async: false
 
-  alias ElxDockerNode.Codex
-  alias ElxDockerNode.CodexBridge
+  alias Hivebeam.Codex
+  alias Hivebeam.CodexBridge
 
   @integration_enabled System.get_env("RUN_INTEGRATION") == "1"
   @tag :integration

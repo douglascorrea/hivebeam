@@ -1,7 +1,7 @@
-defmodule ElxDockerNode.CodexStreamTest do
+defmodule Hivebeam.CodexStreamTest do
   use ExUnit.Case, async: true
 
-  alias ElxDockerNode.CodexStream
+  alias Hivebeam.CodexStream
 
   test "extracts message chunks from nested content structures" do
     update = %{

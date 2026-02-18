@@ -18,7 +18,7 @@ defmodule Mix.Tasks.Node.Send do
     message = required!(opts, :message, "--message")
     timeout = Keyword.get(opts, :timeout, 5_000)
 
-    case ElxDockerNode.send_message(host, port, from: from, message: message, timeout: timeout) do
+    case Hivebeam.send_message(host, port, from: from, message: message, timeout: timeout) do
       {:ok, remote_name} ->
         Mix.shell().info("Message delivered to '#{remote_name}' at #{host}:#{port}")
 

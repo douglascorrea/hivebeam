@@ -1,7 +1,7 @@
-defmodule ElxDockerNode.CodexConfigTest do
+defmodule Hivebeam.CodexConfigTest do
   use ExUnit.Case, async: false
 
-  alias ElxDockerNode.CodexConfig
+  alias Hivebeam.CodexConfig
 
   test "uses defaults when env vars are missing" do
     with_env(
@@ -20,7 +20,7 @@ defmodule ElxDockerNode.CodexConfigTest do
         assert CodexConfig.cluster_retry_ms() == 5_000
         assert CodexConfig.prompt_timeout_ms() == 120_000
         assert CodexConfig.connect_timeout_ms() == 30_000
-        assert CodexConfig.bridge_name() == ElxDockerNode.CodexBridge
+        assert CodexConfig.bridge_name() == Hivebeam.CodexBridge
       end
     )
   end
@@ -56,15 +56,15 @@ defmodule ElxDockerNode.CodexConfigTest do
   end
 
   test "parses custom bridge names" do
-    with_env([{"ELX_CODEX_BRIDGE_NAME", "ElxDockerNode.CustomBridge"}], fn ->
-      assert CodexConfig.bridge_name() == ElxDockerNode.CustomBridge
+    with_env([{"ELX_CODEX_BRIDGE_NAME", "Hivebeam.CustomBridge"}], fn ->
+      assert CodexConfig.bridge_name() == Hivebeam.CustomBridge
     end)
   end
 
   test "prefers sibling codex-acp build when env command is not set" do
     with_env([{"ELX_CODEX_ACP_CMD", nil}], fn ->
       with_temp_dir("acp_cfg", fn tmp_dir ->
-        app_dir = Path.join(tmp_dir, "elx_docker_node")
+        app_dir = Path.join(tmp_dir, "hivebeam")
         sibling_dir = Path.join(tmp_dir, "codex-acp")
         release_dir = Path.join([sibling_dir, "target", "release"])
         binary_path = Path.join(release_dir, "codex-acp")

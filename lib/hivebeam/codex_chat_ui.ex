@@ -1,9 +1,9 @@
-defmodule ElxDockerNode.CodexChatUi do
+defmodule Hivebeam.CodexChatUi do
   @moduledoc false
   use TermUI.Elm
 
-  alias ElxDockerNode.Codex
-  alias ElxDockerNode.CodexStream
+  alias Hivebeam.Codex
+  alias Hivebeam.CodexStream
   alias TermUI.Event
   alias TermUI.Renderer.Style
 

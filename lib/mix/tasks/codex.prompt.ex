@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.Codex.Prompt do
   use Mix.Task
 
-  alias ElxDockerNode.CodexCli
+  alias Hivebeam.CodexCli
 
   @shortdoc "Sends a prompt to the local or remote Codex bridge (with live updates)"
   @switches [

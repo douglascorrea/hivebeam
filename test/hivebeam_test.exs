@@ -1,4 +1,4 @@
-defmodule ElxDockerNodeTest do
+defmodule HivebeamTest do
   use ExUnit.Case
 
   test "can send a message to a running node listener" do
@@ -6,7 +6,7 @@ defmodule ElxDockerNodeTest do
     parent = self()
 
     assert {:ok, pid} =
-             ElxDockerNode.start_node(
+             Hivebeam.start_node(
                name: "receiver",
                port: port,
                on_message: fn payload ->
@@ -18,7 +18,7 @@ defmodule ElxDockerNodeTest do
     on_exit(fn -> Process.exit(pid, :kill) end)
 
     assert {:ok, "receiver"} =
-             ElxDockerNode.send_message("127.0.0.1", port,
+             Hivebeam.send_message("127.0.0.1", port,
                from: "sender",
                message: "hello from test"
              )
@@ -28,7 +28,7 @@ defmodule ElxDockerNodeTest do
 
   test "returns an error when required send options are missing" do
     assert {:error, :missing_required_options} =
-             ElxDockerNode.send_message("127.0.0.1", 9_999, from: "sender")
+             Hivebeam.send_message("127.0.0.1", 9_999, from: "sender")
   end
 
   defp random_port do

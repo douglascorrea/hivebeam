@@ -15,7 +15,7 @@ defmodule Mix.Tasks.Node.Listen do
     name = required!(opts, :name, "--name")
     port = required!(opts, :port, "--port")
 
-    case ElxDockerNode.start_node(name: name, port: port) do
+    case Hivebeam.start_node(name: name, port: port) do
       {:ok, _pid} ->
         Mix.shell().info("Node '#{name}' listening on port #{port}")
         Process.sleep(:infinity)

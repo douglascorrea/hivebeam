@@ -1,11 +1,11 @@
-defmodule ElxDockerNode.CodexBridge do
+defmodule Hivebeam.CodexBridge do
   @moduledoc false
   use GenServer
 
   require Logger
 
-  alias ElxDockerNode.CodexConfig
-  alias ElxDockerNode.CodexStream
+  alias Hivebeam.CodexConfig
+  alias Hivebeam.CodexStream
 
   @type status :: :connecting | :connected | :degraded
   @type approval_mode :: :ask | :allow | :deny
@@ -428,7 +428,7 @@ defmodule ElxDockerNode.CodexBridge do
     opts = [agent_path: state.agent_path, agent_args: state.agent_args]
     handler_args = [bridge: self(), tool_cwd: state.tool_cwd]
 
-    case state.acpex_module.start_client(ElxDockerNode.CodexAcpClient, handler_args, opts) do
+    case state.acpex_module.start_client(Hivebeam.CodexAcpClient, handler_args, opts) do
       {:ok, conn_pid} ->
         case bootstrap_session(state, conn_pid) do
           {:ok, session_id} ->
@@ -474,7 +474,7 @@ defmodule ElxDockerNode.CodexBridge do
         "terminal" => true
       },
       "clientInfo" => %{
-        "name" => "elx-docker-node",
+        "name" => "hivebeam",
         "version" => "0.1.0"
       }
     }

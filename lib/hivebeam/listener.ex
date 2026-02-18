@@ -1,4 +1,4 @@
-defmodule ElxDockerNode.Listener do
+defmodule Hivebeam.Listener do
   @moduledoc false
 
   @listen_options [:binary, active: false, packet: 4, reuseaddr: true]

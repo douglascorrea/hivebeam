@@ -13,7 +13,7 @@ defmodule Mix.Tasks.Codex.Bridge.Run do
       Mix.shell().info("Node is not distributed. Use --name/--cookie for cross-node calls.")
     end
 
-    case ElxDockerNode.Codex.status() do
+    case Hivebeam.Codex.status() do
       {:ok, status} ->
         Mix.shell().info(
           "Bridge status=#{status.status} session_id=#{inspect(status.session_id)} connected=#{status.connected}"

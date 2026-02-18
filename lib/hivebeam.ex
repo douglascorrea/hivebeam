@@ -1,9 +1,9 @@
-defmodule ElxDockerNode do
+defmodule Hivebeam do
   @moduledoc """
   Tiny TCP-based node-to-node messaging for local host + Docker demos.
   """
 
-  alias ElxDockerNode.Listener
+  alias Hivebeam.Listener
 
   @type send_option ::
           {:from, String.t()}
