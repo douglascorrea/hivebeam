@@ -196,6 +196,20 @@ install_from_prebuilt() {
   rm -rf "$TARGET_DIR"
   mkdir -p "$TARGET_DIR" "$BIN_DIR"
   tar -xzf "$ARCHIVE_PATH" -C "$TARGET_DIR"
+
+  # Support both archive layouts:
+  # 1) bin/hivebeam at root
+  # 2) hivebeam/bin/hivebeam nested one level deep
+  if [ ! -x "$TARGET_DIR/bin/hivebeam" ] && [ -x "$TARGET_DIR/hivebeam/bin/hivebeam" ]; then
+    cp -R "$TARGET_DIR/hivebeam/." "$TARGET_DIR"
+    rm -rf "$TARGET_DIR/hivebeam"
+  fi
+
+  if [ ! -x "$TARGET_DIR/bin/hivebeam" ]; then
+    echo "Invalid release archive: missing bin/hivebeam" >&2
+    exit 1
+  fi
+
   ln -sfn "$TARGET_DIR" "$CURRENT_LINK"
 }
 

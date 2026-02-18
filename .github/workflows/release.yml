@@ -48,7 +48,7 @@ jobs:
           OS=${{ matrix.os }}
           ARCH=${{ matrix.arch }}
           OUT="hivebeam-${OS}-${ARCH}.tar.gz"
-          tar -czf "$OUT" -C _build/prod/rel hivebeam
+          tar -czf "$OUT" -C _build/prod/rel/hivebeam .
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$OUT" > "$OUT.sha256"
           else
