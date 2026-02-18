@@ -57,7 +57,21 @@ Defaults:
 - cookie: `elx_cookie`
 - distribution port: `9100`
 - bind IP for exposed dist ports: `0.0.0.0` (`ELX_BIND_IP`)
-- ACP command: `codex-acp`
+- ACP command: `/usr/local/cargo/bin/codex-acp`
+
+The Docker image installs `codex-acp` from the fork configured in `Dockerfile.codex`:
+
+- `CODEX_ACP_GIT_REPO`
+- `CODEX_ACP_GIT_REF`
+
+For local (non-Docker) runs, if `ELX_CODEX_ACP_CMD` is not set, the bridge auto-discovers
+`codex-acp` in this order:
+
+- `../codex-acp/target/release/codex-acp` (sibling fork build)
+- `../codex-acp/target/debug/codex-acp`
+- `~/.cargo/bin/codex-acp`
+- `/usr/local/cargo/bin/codex-acp`
+- `codex-acp` from `PATH`
 
 Bring it up:
 
@@ -168,7 +182,7 @@ mix codex.status --node codex@10.0.0.20
 - **Bridge degraded**: check `mix codex.status` and `last_error`.
 - **No Codex auth**: ensure `~/.codex/auth.json` exists on the node running `codex-acp`.
 - **`Executable not found in PATH: codex-acp`**:
-  - local host bridge: install `codex-acp` locally (`npm i -g @zed-industries/codex-acp`) or target a remote Docker node instead.
+  - local host bridge: install/build `codex-acp` in one of the auto-discovery paths above, or set `ELX_CODEX_ACP_CMD` to an absolute binary path.
   - Docker remote: ensure container node name matches your host IP:
 
 ```bash

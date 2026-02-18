@@ -9,9 +9,22 @@ defmodule ElxDockerNode.CodexConfig do
 
   @spec acp_command() :: {:ok, {String.t(), [String.t()]}} | {:error, term()}
   def acp_command do
-    @default_acp_command
-    |> env("ELX_CODEX_ACP_CMD")
-    |> parse_acp_command()
+    case System.get_env("ELX_CODEX_ACP_CMD") do
+      nil ->
+        parse_acp_command(default_acp_command())
+
+      value when is_binary(value) ->
+        if String.trim(value) == "" do
+          parse_acp_command(default_acp_command())
+        else
+          parse_acp_command(value)
+        end
+    end
+  end
+
+  @spec default_acp_command() :: String.t()
+  def default_acp_command do
+    discover_local_acp_path() || @default_acp_command
   end
 
   @spec parse_acp_command(String.t() | nil) ::
@@ -87,6 +100,27 @@ defmodule ElxDockerNode.CodexConfig do
       true ->
         String.to_atom(value)
     end
+  end
+
+  defp discover_local_acp_path do
+    File.cwd!()
+    |> local_acp_candidates()
+    |> Enum.find(&File.exists?/1)
+  end
+
+  defp local_acp_candidates(cwd) when is_binary(cwd) do
+    sibling_release = Path.expand("../codex-acp/target/release/codex-acp", cwd)
+    sibling_debug = Path.expand("../codex-acp/target/debug/codex-acp", cwd)
+
+    home_candidate =
+      case System.user_home() do
+        nil -> nil
+        home -> Path.join([home, ".cargo", "bin", "codex-acp"])
+      end
+
+    [sibling_release, sibling_debug, home_candidate, "/usr/local/cargo/bin/codex-acp"]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
   end
 
   defp int_env(env_name, default) do

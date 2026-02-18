@@ -12,7 +12,7 @@ services:
       ELX_CLUSTER_NODES: ${ELX_CLUSTER_NODES:-}
       ELX_ERL_DIST_PORT: ${ELX_ERL_DIST_PORT:-9100}
       ELX_BIND_IP: ${ELX_BIND_IP:-0.0.0.0}
-      ELX_CODEX_ACP_CMD: ${ELX_CODEX_ACP_CMD:-codex-acp}
+      ELX_CODEX_ACP_CMD: ${ELX_CODEX_ACP_CMD:-/usr/local/cargo/bin/codex-acp}
       MIX_BUILD_ROOT: /home/node/.mix_build
       MIX_DEPS_PATH: /home/node/.mix_deps
       MIX_NO_INTERACTION: "1"
