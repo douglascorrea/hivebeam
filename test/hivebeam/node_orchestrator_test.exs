@@ -38,7 +38,7 @@ defmodule Hivebeam.NodeOrchestratorTest do
              )
 
     assert runtime.remote == "user@10.0.0.20"
-    assert runtime.remote_path == "/workspace"
+    assert runtime.remote_path == "~/.local/hivebeam/current"
     assert runtime.bind_ip == "0.0.0.0"
     assert runtime.host_ip == "10.0.0.20"
     assert runtime.node_name == "codex@10.0.0.20"

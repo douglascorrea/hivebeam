@@ -1,9 +1,11 @@
 defmodule Hivebeam.NodeOrchestrator do
   @moduledoc false
 
+  alias Hivebeam.ConfigStore
+  alias Hivebeam.Inventory
+
   @compose_file "docker-compose.yml"
   @default_provider "codex"
-  @default_cookie "hivebeam_cookie"
   @default_bind_ip_remote "0.0.0.0"
   @default_remote_timeout_ms 120_000
   @native_runtime_subdir ".hivebeam/nodes"
@@ -40,7 +42,7 @@ defmodule Hivebeam.NodeOrchestrator do
   @spec up(keyword()) :: {:ok, runtime(), String.t()} | {:error, term()}
   def up(opts) do
     with {:ok, runtime} <- build_runtime(opts),
-         :ok <- ensure_remote_path(runtime),
+         :ok <- ensure_remote_path(runtime, create_if_missing: true, bootstrap: true),
          :ok <- ensure_local_bind_ip_if_needed(runtime),
          :ok <- ensure_compose_file_if_needed(runtime),
          {:ok, output} <- run_up(runtime) do
@@ -101,13 +103,16 @@ defmodule Hivebeam.NodeOrchestrator do
       slot = normalize_slot(Keyword.get(opts, :slot), name)
       provider = normalize_provider(Keyword.get(opts, :provider, @default_provider))
       docker = Keyword.get(opts, :docker, false) == true
-      remote = normalize_optional_string(Keyword.get(opts, :remote))
-      remote_path = normalize_remote_path(Keyword.get(opts, :remote_path), cwd)
+      {remote, host_entry} = resolve_remote_target(Keyword.get(opts, :remote))
+
+      remote_path =
+        normalize_remote_path(Keyword.get(opts, :remote_path), cwd, remote, host_entry)
+
       bind_ip = resolve_bind_ip(Keyword.get(opts, :bind_ip), remote, slot, docker)
       host_ip = resolve_host_ip(Keyword.get(opts, :host_ip), remote, bind_ip)
       project_name = "hivebeam_#{name}"
       compose_file = Keyword.get(opts, :compose_file, @compose_file)
-      cookie = normalize_cookie(Keyword.get(opts, :cookie, @default_cookie))
+      cookie = normalize_cookie(Keyword.get(opts, :cookie, ConfigStore.default_cookie()))
       dist_port = normalize_port(Keyword.get(opts, :dist_port), @dist_port_base, slot)
       tcp_port = normalize_port(Keyword.get(opts, :tcp_port), @tcp_port_base, slot)
       debug_port = normalize_port(Keyword.get(opts, :debug_port), @debug_port_base, slot)
@@ -242,7 +247,7 @@ defmodule Hivebeam.NodeOrchestrator do
 
   defp ensure_compose_file_if_needed(%{docker: false}), do: :ok
 
-  defp ensure_compose_file_if_needed(runtime) do
+  defp ensure_compose_file_if_needed(%{remote: nil} = runtime) do
     path = Path.join(runtime.remote_path, runtime.compose_file)
 
     if File.exists?(path) do
@@ -252,19 +257,89 @@ defmodule Hivebeam.NodeOrchestrator do
     end
   end
 
-  defp ensure_remote_path(%{remote: nil}), do: :ok
-
-  defp ensure_remote_path(runtime) do
-    command = "test -d #{shell_escape(runtime.remote_path)}"
+  defp ensure_compose_file_if_needed(runtime) do
+    path = Path.join(runtime.remote_path, runtime.compose_file)
+    command = "test -f #{shell_escape(path)}"
 
     case System.cmd("ssh", [runtime.remote, command], stderr_to_stdout: true) do
       {_output, 0} ->
         :ok
 
+      {_output, _code} ->
+        {:error, {:compose_file_missing, path}}
+    end
+  end
+
+  defp ensure_remote_path(runtime, opts \\ [])
+  defp ensure_remote_path(%{remote: nil}, _opts), do: :ok
+
+  defp ensure_remote_path(runtime, opts) do
+    create_if_missing? = Keyword.get(opts, :create_if_missing, false)
+
+    command =
+      if create_if_missing? do
+        "mkdir -p #{shell_escape(runtime.remote_path)}"
+      else
+        "test -d #{shell_escape(runtime.remote_path)}"
+      end
+
+    case System.cmd("ssh", [runtime.remote, command], stderr_to_stdout: true) do
+      {_output, 0} ->
+        maybe_bootstrap_remote(runtime, opts)
+
       {output, _code} ->
         {:error,
          {:remote_path_missing,
           "Remote path #{runtime.remote_path} not found on #{runtime.remote}. #{String.trim(output)}"}}
+    end
+  end
+
+  defp maybe_bootstrap_remote(%{remote: nil}, _opts), do: :ok
+
+  defp maybe_bootstrap_remote(runtime, opts) do
+    if Keyword.get(opts, :bootstrap, false) do
+      bootstrap_remote_runtime(runtime)
+    else
+      :ok
+    end
+  end
+
+  defp bootstrap_remote_runtime(runtime) do
+    mix_check = "test -f #{shell_escape(Path.join(runtime.remote_path, "mix.exs"))}"
+
+    case System.cmd("ssh", [runtime.remote, mix_check], stderr_to_stdout: true) do
+      {_output, 0} ->
+        :ok
+
+      {_output, _code} ->
+        case discover_repo_url(runtime.cwd) do
+          nil ->
+            {:error,
+             {:remote_bootstrap_failed,
+              "Remote path #{runtime.remote_path} on #{runtime.remote} is missing mix.exs and local git remote.origin.url is unavailable."}}
+
+          repo_url ->
+            clone_command =
+              "if [ -z \"$(ls -A #{shell_escape(runtime.remote_path)} 2>/dev/null)\" ]; then git clone --depth 1 #{shell_escape(repo_url)} #{shell_escape(runtime.remote_path)}; fi"
+
+            case System.cmd("ssh", [runtime.remote, clone_command], stderr_to_stdout: true) do
+              {_clone_output, 0} ->
+                case System.cmd("ssh", [runtime.remote, mix_check], stderr_to_stdout: true) do
+                  {_ok, 0} ->
+                    :ok
+
+                  {output, _} ->
+                    {:error,
+                     {:remote_bootstrap_failed,
+                      "Remote path #{runtime.remote_path} exists but does not contain a Hivebeam checkout. #{String.trim(output)}"}}
+                end
+
+              {output, _code} ->
+                {:error,
+                 {:remote_bootstrap_failed,
+                  "Could not bootstrap #{runtime.remote_path} on #{runtime.remote}. #{String.trim(output)}"}}
+            end
+        end
     end
   end
 
@@ -582,6 +657,32 @@ defmodule Hivebeam.NodeOrchestrator do
 
   defp normalize_optional_string(value), do: value |> to_string() |> String.trim()
 
+  defp resolve_remote_target(value) do
+    remote_value = normalize_optional_string(value)
+
+    if is_nil(remote_value) do
+      {nil, nil}
+    else
+      inventory = Inventory.load()
+
+      case Inventory.find_host(inventory, remote_value) do
+        nil ->
+          {remote_value, nil}
+
+        host ->
+          resolved_remote =
+            host["ssh"]
+            |> normalize_optional_string()
+            |> case do
+              nil -> remote_value
+              ssh -> ssh
+            end
+
+          {resolved_remote, host}
+      end
+    end
+  end
+
   defp normalize_provider(nil), do: @default_provider
 
   defp normalize_provider(value) do
@@ -593,29 +694,42 @@ defmodule Hivebeam.NodeOrchestrator do
     end
   end
 
-  defp normalize_cookie(nil), do: @default_cookie
+  defp normalize_cookie(nil), do: ConfigStore.default_cookie()
 
   defp normalize_cookie(value) do
     value
     |> normalize_optional_string()
     |> case do
-      nil -> @default_cookie
+      nil -> ConfigStore.default_cookie()
       cookie -> cookie
     end
   end
 
-  defp normalize_remote_path(nil, cwd), do: cwd
+  defp normalize_remote_path(nil, cwd, nil, _host_entry), do: cwd
 
-  defp normalize_remote_path(value, cwd) do
+  defp normalize_remote_path(value, cwd, remote, host_entry) do
     case normalize_optional_string(value) do
-      nil -> cwd
-      path -> path
+      nil ->
+        cond do
+          is_binary(remote) and is_map(host_entry) and not is_nil(host_entry["remote_path"]) ->
+            normalize_optional_string(host_entry["remote_path"]) ||
+              ConfigStore.default_remote_path()
+
+          is_binary(remote) ->
+            ConfigStore.default_remote_path()
+
+          true ->
+            cwd
+        end
+
+      path ->
+        path
     end
   end
 
   defp hydrate_opts_from_runtime_metadata(opts, cwd, name) do
-    remote = normalize_optional_string(Keyword.get(opts, :remote))
-    remote_path = normalize_remote_path(Keyword.get(opts, :remote_path), cwd)
+    {remote, host_entry} = resolve_remote_target(Keyword.get(opts, :remote))
+    remote_path = normalize_remote_path(Keyword.get(opts, :remote_path), cwd, remote, host_entry)
 
     case load_runtime_metadata(name, remote, remote_path) do
       {:ok, meta} ->
@@ -797,6 +911,23 @@ defmodule Hivebeam.NodeOrchestrator do
 
       _ ->
         env_map
+    end
+  end
+
+  defp discover_repo_url(cwd) do
+    case System.cmd("git", ["-C", cwd, "config", "--get", "remote.origin.url"],
+           stderr_to_stdout: true
+         ) do
+      {value, 0} ->
+        value
+        |> String.trim()
+        |> case do
+          "" -> nil
+          url -> url
+        end
+
+      _ ->
+        nil
     end
   end
 

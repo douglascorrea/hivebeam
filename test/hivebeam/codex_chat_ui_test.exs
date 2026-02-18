@@ -275,6 +275,24 @@ defmodule Hivebeam.CodexChatUiTest do
     assert state.height >= 10
   end
 
+  test "ctrl+b toggles left pane visibility" do
+    state = CodexChatUi.init(targets: [nil])
+    assert state.left_pane_visible? == true
+
+    assert {:msg, :toggle_left_pane} =
+             CodexChatUi.event_to_msg(%Event.Key{key: "b", modifiers: [:ctrl]}, state)
+
+    {state, []} = CodexChatUi.update(:toggle_left_pane, state)
+    assert state.left_pane_visible? == false
+  end
+
+  test "/layout command changes layout mode" do
+    state = CodexChatUi.init(targets: [nil])
+    {state, []} = CodexChatUi.update({:insert, "/layout compact"}, state)
+    {state, []} = CodexChatUi.update(:submit, state)
+    assert state.layout_mode == :compact
+  end
+
   defp push_stream_update(state, update) do
     push_stream_event(state, :update, update)
   end

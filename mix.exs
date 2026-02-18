@@ -9,7 +9,8 @@ defmodule Hivebeam.MixProject do
       version: @version,
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      releases: releases()
     ]
   end
 
@@ -21,11 +22,21 @@ defmodule Hivebeam.MixProject do
     ]
   end
 
+  defp releases do
+    [
+      hivebeam: [
+        include_executables_for: [:unix],
+        applications: [runtime_tools: :permanent]
+      ]
+    ]
+  end
+
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
       {:acpex, path: "vendor/acpex"},
-      {:term_ui, git: "https://github.com/pcharbon70/term_ui.git"}
+      {:term_ui, git: "https://github.com/pcharbon70/term_ui.git"},
+      {:libcluster, "~> 3.5"}
     ]
   end
 end

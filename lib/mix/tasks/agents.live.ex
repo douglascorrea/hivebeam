@@ -5,6 +5,8 @@ defmodule Mix.Tasks.Agents.Live do
   alias Hivebeam.Codex
   alias Hivebeam.CodexChatUi
   alias Hivebeam.CodexCli
+  alias Hivebeam.DiscoveryManager
+  alias Hivebeam.Inventory
 
   @shortdoc "Realtime local/remote prompts using all available ACP bridges"
 
@@ -23,6 +25,7 @@ defmodule Mix.Tasks.Agents.Live do
     tools: :boolean,
     approve: :string,
     providers: :string,
+    targets: :keep,
     name: :string,
     host_ip: :string,
     cookie: :string,
@@ -48,9 +51,10 @@ defmodule Mix.Tasks.Agents.Live do
     validate_invalid!(invalid)
 
     approval_mode = CodexCli.parse_approval_mode!(Keyword.get(opts, :approve, "ask"))
-    target_aliases = parse_target_aliases(opts)
-    provider_specs = parse_provider_specs(opts)
-    {nodes, remote_nodes} = build_nodes(opts)
+    selectors = parse_target_selectors(opts)
+    provider_specs = parse_provider_specs(opts, selectors.providers)
+    {nodes, remote_nodes, discovered_aliases} = build_nodes(opts, selectors)
+    target_aliases = parse_target_aliases(opts) |> Map.merge(discovered_aliases)
 
     ensure_distribution!(remote_nodes, opts)
     connect_remote_targets!(remote_nodes)
@@ -107,13 +111,14 @@ defmodule Mix.Tasks.Agents.Live do
     end
   end
 
-  defp parse_provider_specs(opts) do
+  defp parse_provider_specs(opts, selector_providers) do
     providers =
-      opts
-      |> Keyword.get(:providers)
-      |> case do
+      case Keyword.get(opts, :providers) do
         nil ->
-          nil
+          case selector_providers do
+            [] -> nil
+            selected -> selected
+          end
 
         value ->
           value
@@ -131,10 +136,37 @@ defmodule Mix.Tasks.Agents.Live do
     specs
   end
 
-  defp build_nodes(opts) do
+  defp build_nodes(opts, selectors) do
     remote_name = Keyword.get(opts, :remote_name, "codex")
     remote_self? = Keyword.get(opts, :remote_self, false)
 
+    explicit_nodes? =
+      opts
+      |> Keyword.get_values(:node)
+      |> Enum.any?()
+
+    explicit_remote_ips? =
+      opts
+      |> Keyword.get_values(:remote_ip)
+      |> Enum.any?()
+
+    if explicit_nodes? or explicit_remote_ips? or remote_self? do
+      {nodes, remote_nodes} = build_explicit_nodes(opts, remote_name, remote_self?)
+      {nodes, remote_nodes, %{}}
+    else
+      discovery = DiscoveryManager.discover(selectors: selectors.raw)
+      include_local? = Keyword.get(opts, :local, false) or discovery.nodes == []
+
+      nodes =
+        if(include_local?, do: [nil], else: [])
+        |> Kernel.++(discovery.nodes)
+        |> Enum.uniq()
+
+      {nodes, discovery.nodes, discovery.node_aliases}
+    end
+  end
+
+  defp build_explicit_nodes(opts, remote_name, remote_self?) do
     nodes_from_flag =
       opts
       |> Keyword.get_values(:node)
@@ -227,6 +259,20 @@ defmodule Mix.Tasks.Agents.Live do
     |> String.split(",")
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == ""))
+  end
+
+  defp parse_target_selectors(opts) do
+    raw =
+      opts
+      |> Keyword.get_values(:targets)
+      |> Enum.flat_map(&split_csv/1)
+      |> case do
+        [] -> ["all"]
+        values -> values
+      end
+
+    parsed = Inventory.parse_selectors(raw)
+    %{raw: raw, providers: parsed.providers}
   end
 
   defp ensure_distribution!([], _opts), do: :ok

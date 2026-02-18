@@ -1,6 +1,8 @@
 defmodule Hivebeam.CodexConfig do
   @moduledoc false
 
+  alias Hivebeam.ConfigStore
+
   @default_acp_provider "codex"
   @default_acp_command "codex-acp"
   @default_claude_acp_command "claude-agent-acp"
@@ -9,6 +11,7 @@ defmodule Hivebeam.CodexConfig do
   @default_prompt_timeout_ms 120_000
   @default_connect_timeout_ms 30_000
   @default_bridge_name Hivebeam.CodexBridge
+  @default_discovery_mode "hybrid"
 
   @spec acp_provider() :: String.t()
   def acp_provider do
@@ -123,6 +126,58 @@ defmodule Hivebeam.CodexConfig do
   @spec cluster_retry_ms() :: pos_integer()
   def cluster_retry_ms, do: int_env("HIVEBEAM_CLUSTER_RETRY_MS", @default_cluster_retry_ms)
 
+  @spec discovery_mode() :: String.t()
+  def discovery_mode do
+    case System.get_env("HIVEBEAM_DISCOVERY_MODE") do
+      value when is_binary(value) ->
+        normalize_discovery_mode(value)
+
+      _ ->
+        ConfigStore.discovery_mode()
+        |> normalize_discovery_mode()
+    end
+  end
+
+  @spec libcluster_topologies() :: keyword()
+  def libcluster_topologies do
+    epmd_nodes =
+      "HIVEBEAM_LIBCLUSTER_EPMD_NODES"
+      |> System.get_env("")
+      |> parse_cluster_nodes()
+
+    dns_query =
+      "HIVEBEAM_LIBCLUSTER_DNS_QUERY"
+      |> System.get_env("")
+      |> String.trim()
+
+    topologies = []
+
+    topologies =
+      if epmd_nodes == [] do
+        topologies
+      else
+        topologies ++
+          [
+            hivebeam_epmd: [
+              strategy: Cluster.Strategy.Epmd,
+              config: [hosts: epmd_nodes]
+            ]
+          ]
+      end
+
+    if dns_query == "" do
+      topologies
+    else
+      topologies ++
+        [
+          hivebeam_dns: [
+            strategy: Cluster.Strategy.DNSPoll,
+            config: [query: dns_query, polling_interval: cluster_retry_ms()]
+          ]
+        ]
+    end
+  end
+
   @spec prompt_timeout_ms() :: pos_integer()
   def prompt_timeout_ms,
     do: int_env("HIVEBEAM_CODEX_PROMPT_TIMEOUT_MS", @default_prompt_timeout_ms)
@@ -214,4 +269,13 @@ defmodule Hivebeam.CodexConfig do
   end
 
   defp env(default, env_name), do: System.get_env(env_name, default)
+
+  defp normalize_discovery_mode(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "inventory" -> "inventory"
+      "libcluster" -> "libcluster"
+      "hybrid" -> "hybrid"
+      _ -> @default_discovery_mode
+    end
+  end
 end

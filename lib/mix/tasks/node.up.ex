@@ -1,6 +1,7 @@
 defmodule Mix.Tasks.Node.Up do
   use Mix.Task
 
+  alias Hivebeam.Inventory
   alias Hivebeam.NodeOrchestrator
 
   @shortdoc "Starts a named Hivebeam node locally or over SSH (native by default, --docker optional)"
@@ -30,6 +31,12 @@ defmodule Mix.Tasks.Node.Up do
 
     case NodeOrchestrator.up(opts) do
       {:ok, runtime, output} ->
+        inventory =
+          runtime
+          |> Inventory.record_runtime()
+
+        _ = Inventory.save(inventory)
+
         mode = if(runtime.docker, do: "docker", else: "native")
         Mix.shell().info("Started #{runtime.project_name} (mode=#{mode})")
         Mix.shell().info("  node: #{runtime.node_name}")
@@ -56,6 +63,9 @@ defmodule Mix.Tasks.Node.Up do
         Mix.raise("Compose file not found: #{path}")
 
       {:error, {:remote_path_missing, reason}} ->
+        Mix.raise(reason)
+
+      {:error, {:remote_bootstrap_failed, reason}} ->
         Mix.raise(reason)
 
       {:error, {:local_bind_ip_unavailable, bind_ip}} ->

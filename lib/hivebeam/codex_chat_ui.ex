@@ -5,6 +5,9 @@ defmodule Hivebeam.CodexChatUi do
   alias Hivebeam.Codex
   alias Hivebeam.FileCompletion
   alias Hivebeam.CodexStream
+  alias Hivebeam.UI.Keymap
+  alias Hivebeam.UI.Preferences
+  alias Hivebeam.UI.SessionModel
   alias TermUI.Event
   alias TermUI.Markdown
   alias TermUI.Renderer.Style
@@ -73,6 +76,7 @@ defmodule Hivebeam.CodexChatUi do
 
   @impl true
   def init(opts) do
+    ui_prefs = Preferences.load()
     target_aliases = normalize_target_aliases(Keyword.get(opts, :target_aliases, %{}))
 
     targets =
@@ -90,6 +94,12 @@ defmodule Hivebeam.CodexChatUi do
       prompt_opts: prompt_opts,
       show_thoughts?: Keyword.get(prompt_opts, :show_thoughts, true),
       show_tools?: Keyword.get(prompt_opts, :show_tools, true),
+      layout_mode: parse_layout_mode(Map.get(ui_prefs, "layout_mode")) || :auto,
+      auto_layout?: Map.get(ui_prefs, "auto_layout", true) == true,
+      left_pane_visible?: Map.get(ui_prefs, "left_pane", true) == true,
+      right_pane_visible?: Map.get(ui_prefs, "right_pane", true) == true,
+      command_palette_visible?: false,
+      target_switcher_visible?: false,
       input: "",
       entries: [],
       pending_prompt: nil,
@@ -139,7 +149,22 @@ defmodule Hivebeam.CodexChatUi do
     if :ctrl in modifiers, do: {:msg, :quit}, else: {:msg, {:insert, key}}
   end
 
-  def event_to_msg(%Event.Key{key: :escape}, _state), do: {:msg, :quit}
+  def event_to_msg(%Event.Key{modifiers: modifiers} = event, _state)
+      when is_list(modifiers) and modifiers != [] do
+    case Keymap.resolve(event) do
+      {:ok, msg} -> {:msg, msg}
+      :ignore -> :ignore
+    end
+  end
+
+  def event_to_msg(%Event.Key{key: :escape}, state) do
+    if state.command_palette_visible? or state.target_switcher_visible? do
+      {:msg, :close_overlays}
+    else
+      {:msg, :quit}
+    end
+  end
+
   def event_to_msg(%Event.Key{key: :enter}, _state), do: {:msg, :submit}
   def event_to_msg(%Event.Key{key: :backspace}, _state), do: {:msg, :backspace}
   def event_to_msg(%Event.Key{key: :delete}, _state), do: {:msg, :backspace}
@@ -182,6 +207,59 @@ defmodule Hivebeam.CodexChatUi do
   def update(:tab_pressed, state) do
     {handle_tab_pressed(state), []}
   end
+
+  def update(:close_overlays, state) do
+    {%{state | command_palette_visible?: false, target_switcher_visible?: false}, []}
+  end
+
+  def update(:toggle_left_pane, state) do
+    next =
+      state
+      |> Map.update!(:left_pane_visible?, &(!&1))
+      |> persist_ui_preferences()
+
+    {append_entry(next, :status, "chat", "Left pane #{on_off(next.left_pane_visible?)}"), []}
+  end
+
+  def update(:toggle_right_pane, state) do
+    next =
+      state
+      |> Map.update!(:right_pane_visible?, &(!&1))
+      |> persist_ui_preferences()
+
+    {append_entry(next, :status, "chat", "Right pane #{on_off(next.right_pane_visible?)}"), []}
+  end
+
+  def update(:cycle_layout_mode, state) do
+    layout =
+      case state.layout_mode do
+        :auto -> :full
+        :full -> :focus
+        :focus -> :compact
+        :compact -> :auto
+        _ -> :auto
+      end
+
+    next =
+      state
+      |> Map.put(:layout_mode, layout)
+      |> persist_ui_preferences()
+
+    {append_entry(next, :status, "chat", "Layout set to #{layout}"), []}
+  end
+
+  def update(:toggle_command_palette, state) do
+    next = %{state | command_palette_visible?: not state.command_palette_visible?}
+    {next, []}
+  end
+
+  def update(:toggle_target_switcher, state) do
+    next = %{state | target_switcher_visible?: not state.target_switcher_visible?}
+    {next, []}
+  end
+
+  def update(:refresh_status, state), do: handle_command(state, "/status")
+  def update(:cancel_running_prompt, state), do: handle_command(state, "/cancel")
 
   def update(:next_target, state) do
     next_index =
@@ -367,6 +445,7 @@ defmodule Hivebeam.CodexChatUi do
   def view(state) do
     active_target = Enum.at(state.targets, state.active_index)
     active_label = target_label(active_target)
+    layout = effective_layout(state)
 
     header_style = Style.new(fg: :cyan, attrs: [:bold])
     meta_style = Style.new(fg: :bright_black)
@@ -378,7 +457,7 @@ defmodule Hivebeam.CodexChatUi do
     scroll_hint = "scroll #{state.scroll_offset}/#{max_scroll_offset(state)}"
 
     header =
-      "Codex Chat (term_ui) target #{state.active_index + 1}/#{length(state.targets)} #{active_label} | #{pending} | #{scroll_hint}"
+      "Codex Chat target #{state.active_index + 1}/#{length(state.targets)} #{active_label} | #{pending} | layout=#{layout} | panes=L:#{pane_hint(state.left_pane_visible?)} R:#{pane_hint(state.right_pane_visible?)} | #{scroll_hint}"
 
     subheader =
       "Tab complete/target | Enter send | Up/Down/Page/Home/End scroll | Ctrl+C exit"
@@ -398,6 +477,14 @@ defmodule Hivebeam.CodexChatUi do
         Enum.map(rendered_lines, &line_to_node/1)
       end
 
+    pane_nodes =
+      pane_sections(state, active_label)
+      |> Enum.map(&text(&1, meta_style))
+
+    overlay_nodes =
+      overlay_sections(state)
+      |> Enum.map(&text(&1, approval_style))
+
     input_line =
       case state.approval_request do
         nil -> "[#{active_label}] you> #{state.input}"
@@ -415,8 +502,9 @@ defmodule Hivebeam.CodexChatUi do
       [
         text(header, header_style),
         text(subheader, meta_style),
+        text(Keymap.footer_hint(), meta_style),
         text("", nil)
-        | body_nodes
+        | pane_nodes ++ overlay_nodes ++ body_nodes
       ] ++
         [
           text("", nil),
@@ -448,6 +536,9 @@ defmodule Hivebeam.CodexChatUi do
       |> append_entry(:system, "chat", "%node+agent <prompt>: route to specific target")
       |> append_entry(:system, "chat", "/status: fetch target bridge status")
       |> append_entry(:system, "chat", "/cancel: cancel running prompt")
+      |> append_entry(:system, "chat", "/layout <auto|full|focus|compact>: set layout mode")
+      |> append_entry(:system, "chat", "/pane <left|right> <on|off>: toggle panes")
+      |> append_entry(:system, "chat", "/keys: show shortcuts")
       |> append_entry(:system, "chat", "/exit: close chat")
       |> append_entry(:system, "chat", "Up/Down/PageUp/PageDown/Home/End: scroll transcript"),
       []
@@ -521,6 +612,64 @@ defmodule Hivebeam.CodexChatUi do
         end)
 
         {append_entry(state, :status, label, "Cancelling prompt..."), []}
+    end
+  end
+
+  defp handle_command(state, "/keys") do
+    state =
+      Enum.reduce(
+        Keymap.shortcuts_lines(),
+        append_entry(state, :system, "chat", "Shortcuts:"),
+        fn line, acc ->
+          append_entry(acc, :system, "chat", "  #{line}")
+        end
+      )
+
+    {state, []}
+  end
+
+  defp handle_command(state, "/layout " <> value) do
+    layout = parse_layout_mode(value)
+
+    if is_nil(layout) do
+      {append_entry(state, :error, "chat", "Invalid layout. Use auto|full|focus|compact"), []}
+    else
+      next =
+        state
+        |> Map.put(:layout_mode, layout)
+        |> persist_ui_preferences()
+
+      {append_entry(next, :status, "chat", "Layout set to #{layout}"), []}
+    end
+  end
+
+  defp handle_command(state, "/pane " <> rest) do
+    parts =
+      rest
+      |> String.split(" ", trim: true)
+      |> Enum.map(&String.downcase/1)
+
+    case parts do
+      [pane, state_value] when pane in ["left", "right"] and state_value in ["on", "off"] ->
+        enabled? = state_value == "on"
+
+        next =
+          case pane do
+            "left" -> %{state | left_pane_visible?: enabled?}
+            "right" -> %{state | right_pane_visible?: enabled?}
+          end
+          |> persist_ui_preferences()
+
+        {append_entry(
+           next,
+           :status,
+           "chat",
+           "#{String.capitalize(pane)} pane #{on_off(enabled?)}"
+         ), []}
+
+      _ ->
+        {append_entry(state, :error, "chat", "Invalid pane command. Use /pane left|right on|off"),
+         []}
     end
   end
 
@@ -743,10 +892,15 @@ defmodule Hivebeam.CodexChatUi do
             _ -> "Status update received."
           end
 
+        _ui_event = SessionModel.status_update(stream_target_label(payload), %{message: message})
         append_entry(state, :status, stream_target_label(payload), message)
 
       event when event in [:update, "update"] ->
         update = fetch(payload, :update)
+
+        _ui_event =
+          SessionModel.target_update(%{node: stream_target_label(payload), update: update})
+
         render_stream_update(update, stream_target_label(payload), state)
 
       _ ->
@@ -1830,6 +1984,105 @@ defmodule Hivebeam.CodexChatUi do
     |> Enum.drop(-1)
     |> Enum.join()
   end
+
+  defp parse_layout_mode(value) when is_atom(value) do
+    parse_layout_mode(Atom.to_string(value))
+  end
+
+  defp parse_layout_mode(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "auto" -> :auto
+      "full" -> :full
+      "focus" -> :focus
+      "compact" -> :compact
+      _ -> nil
+    end
+  end
+
+  defp parse_layout_mode(_value), do: nil
+
+  defp effective_layout(state) do
+    cond do
+      state.layout_mode == :auto and state.auto_layout? ->
+        auto_layout_for_width(state.width)
+
+      state.layout_mode in [:auto, :full, :focus, :compact] ->
+        state.layout_mode
+
+      true ->
+        :auto
+    end
+  end
+
+  defp auto_layout_for_width(width) when width >= 160, do: :full
+  defp auto_layout_for_width(width) when width >= 120, do: :focus
+  defp auto_layout_for_width(_width), do: :compact
+
+  defp pane_sections(state, active_label) do
+    lines = []
+
+    lines =
+      if state.left_pane_visible? do
+        lines ++
+          [
+            "[fleet] " <> fleet_summary(state),
+            "[fleet] active=#{active_label} targets=#{length(state.targets)}"
+          ]
+      else
+        lines
+      end
+
+    if state.right_pane_visible? do
+      lines ++ [right_pane_summary(state)]
+    else
+      lines
+    end
+  end
+
+  defp fleet_summary(state) do
+    state.targets
+    |> Enum.map(&target_label/1)
+    |> Enum.join(", ")
+  end
+
+  defp right_pane_summary(state) do
+    active_count = map_size(state.activity_indices)
+    pending = if state.pending_prompt, do: "running", else: "idle"
+    "[activity] pending=#{pending} active=#{active_count}"
+  end
+
+  defp overlay_sections(state) do
+    []
+    |> maybe_add_overlay(
+      state.command_palette_visible?,
+      "[palette] commands: /targets /status /cancel /layout /pane /keys"
+    )
+    |> maybe_add_overlay(
+      state.target_switcher_visible?,
+      "[switcher] use Tab and /targets to choose active target"
+    )
+  end
+
+  defp maybe_add_overlay(lines, true, line), do: lines ++ [line]
+  defp maybe_add_overlay(lines, false, _line), do: lines
+
+  defp persist_ui_preferences(state) do
+    _ =
+      Preferences.save(%{
+        "layout_mode" => Atom.to_string(state.layout_mode || :auto),
+        "left_pane" => state.left_pane_visible? == true,
+        "right_pane" => state.right_pane_visible? == true,
+        "auto_layout" => state.auto_layout? == true
+      })
+
+    state
+  end
+
+  defp on_off(true), do: "on"
+  defp on_off(false), do: "off"
+
+  defp pane_hint(true), do: "on"
+  defp pane_hint(false), do: "off"
 
   defp fetch(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

@@ -1,170 +1,114 @@
 # Hivebeam
 
-Simple runbook for local and remote nodes.
+Distributed multi-agent chat/orchestration for local and remote BEAM nodes.
 
-## Important: execution mode
-
-- Default (`mix node.up ...`): runs **outside Docker** (native process on the machine).
-- Docker mode: add `--docker`.
-
-Examples:
+## Install (release-first)
 
 ```bash
-# Native (default)
-mix node.up --name box1 --provider codex
-
-# Docker
-mix node.up --docker --name box1 --provider codex
+curl -fsSL https://raw.githubusercontent.com/douglascorrea/hivebeam/main/install.sh | sh
 ```
 
-## Requirements
+Default install root: `~/.local/hivebeam`.
 
-- Elixir
-- This repo checked out
-- Docker only if you use `--docker`
+The installer creates `~/.local/bin/hivebeam` and does **not** install the optional LiveView addon.
 
-First time:
+## Source workflow (contributors)
 
 ```bash
 mix deps.get
 mix compile
 ```
 
-## 1) Local machine
+## DX defaults
 
-### 1.1 Start nodes (native, no Docker)
+- Remote runtime path default: `~/.local/hivebeam/current`
+- Discovery mode default: `hybrid` (`inventory` + runtime peers)
+- Inventory/config root: `~/.config/hivebeam`
+  - `config.toml`
+  - `nodes.toml`
+  - `ui.toml`
 
-```bash
-mix node.up --name box1 --provider codex
-mix node.up --name box2 --provider claude
-```
-
-### 1.2 Start nodes (Docker)
-
-On macOS, add loopback aliases first (once per IP you use):
+## Unified CLI (via Mix task)
 
 ```bash
-sudo ifconfig lo0 alias 127.0.0.11 up
-sudo ifconfig lo0 alias 127.0.0.12 up
+mix hivebeam host add --alias prod-a --ssh user@prod-a --tags prod,edge
+mix hivebeam host bootstrap --host prod-a --version latest
+mix hivebeam discover sync --targets all
+mix hivebeam targets ls --targets tag:prod
+mix hivebeam chat --targets host:prod-a
 ```
 
-For more local Docker nodes, keep adding `127.0.0.13`, `127.0.0.14`, etc.
+Selector grammar:
+
+- `all`
+- `host:<alias>`
+- `tag:<tag>`
+- `provider:codex|claude`
+- `state:up|degraded`
+
+## Node lifecycle (compatibility tasks)
+
+Legacy tasks remain supported:
 
 ```bash
-mix node.up --docker --name box1 --provider codex
-mix node.up --docker --name box2 --provider claude
+mix node.up --name edge1 --provider codex --remote prod-a
+mix node.up --name edge2 --provider claude --remote prod-a
+mix node.ls --name edge1 --remote prod-a
+mix node.down --name edge1 --remote prod-a
 ```
 
-### 1.3 Check nodes
+If `--remote` matches a host alias in inventory, Hivebeam resolves SSH + remote path automatically.
+
+## Chat and TUI
 
 ```bash
-mix node.ls --name box1
-mix node.ls --name box2
+mix agents.live --targets all --chat
 ```
 
-### 1.4 Connect to local nodes
+New layout/keybinding capabilities:
+
+- Adaptive layout modes: `auto`, `full`, `focus`, `compact`
+- Hideable panes: left fleet pane, right activity pane
+- Keybindings:
+  - `Ctrl+B` toggle left pane
+  - `Ctrl+G` toggle right pane
+  - `Ctrl+L` cycle layout
+  - `Ctrl+K` command palette hint
+  - `Ctrl+J` target switcher hint
+  - `Ctrl+R` refresh status
+  - `Ctrl+X` cancel prompt
+  - `Esc` close overlays
+- Slash commands:
+  - `/layout <auto|full|focus|compact>`
+  - `/pane <left|right> <on|off>`
+  - `/keys`
+
+## Hybrid discovery and libcluster
+
+`hivebeam` can merge:
+
+1. Managed inventory nodes (`nodes.toml`)
+2. Runtime peers from `Node.list()` + configured cluster peers
+
+Discovery mode can be set with:
 
 ```bash
-mix agents.live \
-  --node codex@127.0.0.11 \
-  --node claude@127.0.0.12 \
-  --alias box1=codex@127.0.0.11 \
-  --alias box2=claude@127.0.0.12 \
-  --chat
+export HIVEBEAM_DISCOVERY_MODE=hybrid
 ```
 
-In chat:
+Optional libcluster topologies are enabled with env vars:
 
-```text
-%box1+codex check @mix.exs
-%box2+claude review @lib/hivebeam/codex_chat_ui.ex
-```
+- `HIVEBEAM_LIBCLUSTER_EPMD_NODES=node1@host,node2@host`
+- `HIVEBEAM_LIBCLUSTER_DNS_QUERY=service.namespace.svc.cluster.local`
 
-## 2) Remote Linux/macOS machines
+## Optional LiveView addon (opt-in)
 
-### 2.1 One-time setup on remote
+Addon path:
 
-```bash
-ssh user@remote-host
-git clone <your-repo-url> /srv/hivebeam
-cd /srv/hivebeam
-```
+`addons/hivebeam_liveview`
 
-### 2.2 Start remote nodes (native, default)
+It is local-only and separate from core install/runtime. Core install script never deploys Phoenix dependencies to remote hosts.
 
-```bash
-mix node.up --name edge1 --provider codex --remote user@remote-host --remote-path /srv/hivebeam
-mix node.up --name edge2 --provider claude --remote user@remote-host --remote-path /srv/hivebeam
-```
+Shared UI contract:
 
-### 2.3 Start remote nodes with Docker
-
-```bash
-mix node.up --docker --name edge1 --provider codex --remote user@remote-host --remote-path /srv/hivebeam
-mix node.up --docker --name edge2 --provider claude --remote user@remote-host --remote-path /srv/hivebeam
-```
-
-### 2.4 Check remote nodes
-
-```bash
-mix node.ls --name edge1 --remote user@remote-host --remote-path /srv/hivebeam
-mix node.ls --name edge2 --remote user@remote-host --remote-path /srv/hivebeam
-```
-
-### 2.5 Connect to remote nodes
-
-```bash
-mix agents.live \
-  --node codex@remote-host \
-  --node claude@remote-host \
-  --alias edge1=codex@remote-host \
-  --alias edge2=claude@remote-host \
-  --chat
-```
-
-## 3) Stop nodes
-
-### Local
-
-```bash
-mix node.down --name box1
-mix node.down --name box2
-```
-
-Docker local:
-
-```bash
-mix node.down --docker --name box1
-mix node.down --docker --name box2
-```
-
-### Remote
-
-```bash
-mix node.down --name edge1 --remote user@remote-host --remote-path /srv/hivebeam
-mix node.down --name edge2 --remote user@remote-host --remote-path /srv/hivebeam
-```
-
-Docker remote:
-
-```bash
-mix node.down --docker --name edge1 --remote user@remote-host --remote-path /srv/hivebeam
-mix node.down --docker --name edge2 --remote user@remote-host --remote-path /srv/hivebeam
-```
-
-## 4) Docker build args (only for --docker mode)
-
-You do not need to set these unless you want a custom `codex-acp` source/revision.
-
-Defaults:
-
-- `CODEX_ACP_GIT_REPO=https://github.com/douglascorrea/codex-acp.git`
-- `CODEX_ACP_GIT_REF=5d8c939`
-
-Override example:
-
-```bash
-CODEX_ACP_GIT_REPO=https://github.com/your-org/codex-acp.git \
-CODEX_ACP_GIT_REF=main \
-mix node.up --docker --name box1 --provider codex
-```
+`docs/ui-contract.md`
