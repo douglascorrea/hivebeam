@@ -3,23 +3,29 @@ defmodule Hivebeam.FileCompletion do
 
   @default_timeout_ms 1_500
   @max_results 100
+  @default_cwd :__default_cwd__
 
   @spec complete(node() | nil, String.t(), keyword()) :: [String.t()]
   def complete(node, prefix, opts \\ [])
       when (is_atom(node) or is_nil(node)) and is_binary(prefix) do
-    cwd = Keyword.get(opts, :cwd, File.cwd!())
+    cwd = Keyword.get(opts, :cwd, @default_cwd)
     timeout_ms = Keyword.get(opts, :timeout, @default_timeout_ms)
 
     cond do
       is_nil(node) or node == Node.self() ->
-        complete_local(prefix, cwd)
+        complete_local(prefix, resolve_local_cwd(cwd))
 
       true ->
-        :erpc.call(node, __MODULE__, :complete_local, [prefix, cwd], timeout_ms)
+        complete_remote(node, prefix, cwd, timeout_ms)
     end
   catch
     :exit, _reason ->
       []
+  end
+
+  @spec complete_local_default_cwd(String.t()) :: [String.t()]
+  def complete_local_default_cwd(prefix) when is_binary(prefix) do
+    complete_local(prefix, File.cwd!())
   end
 
   @spec complete_local(String.t(), String.t()) :: [String.t()]
@@ -74,5 +80,21 @@ defmodule Hivebeam.FileCompletion do
 
   defp skip_hidden?(entry, partial) do
     String.starts_with?(entry, ".") and not String.starts_with?(partial, ".")
+  end
+
+  defp resolve_local_cwd(@default_cwd), do: File.cwd!()
+  defp resolve_local_cwd(cwd) when is_binary(cwd), do: cwd
+  defp resolve_local_cwd(_cwd), do: File.cwd!()
+
+  defp complete_remote(node, prefix, @default_cwd, timeout_ms) do
+    :erpc.call(node, __MODULE__, :complete_local_default_cwd, [prefix], timeout_ms)
+  end
+
+  defp complete_remote(node, prefix, cwd, timeout_ms) when is_binary(cwd) do
+    :erpc.call(node, __MODULE__, :complete_local, [prefix, cwd], timeout_ms)
+  end
+
+  defp complete_remote(node, prefix, _cwd, timeout_ms) do
+    :erpc.call(node, __MODULE__, :complete_local_default_cwd, [prefix], timeout_ms)
   end
 end
