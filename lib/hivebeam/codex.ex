@@ -26,17 +26,26 @@ defmodule Hivebeam.Codex do
     end
   end
 
-  @spec status(node() | nil) :: {:ok, map()} | {:error, term()}
-  def status(target_node \\ nil)
+  @spec status(node() | nil, keyword()) :: {:ok, map()} | {:error, term()}
+  def status(target_node \\ nil, opts \\ [])
 
-  def status(nil), do: safe_local_call(fn -> CodexBridge.status() end)
+  def status(nil, opts) do
+    bridge_name = Keyword.get(opts, :bridge_name, CodexConfig.bridge_name())
+    safe_local_call(fn -> CodexBridge.status(bridge_name) end)
+  end
 
-  def status(target_node) when is_atom(target_node) do
+  def status(target_node, opts) when is_atom(target_node) do
     if target_node == Node.self() do
-      status(nil)
+      status(nil, opts)
     else
-      timeout_ms = CodexConfig.connect_timeout_ms()
-      safe_remote_call(fn -> :erpc.call(target_node, CodexBridge, :status, [], timeout_ms) end)
+      timeout_ms =
+        normalize_timeout_ms(Keyword.get(opts, :timeout), CodexConfig.connect_timeout_ms())
+
+      bridge_name = Keyword.get(opts, :bridge_name, CodexConfig.bridge_name())
+
+      safe_remote_call(fn ->
+        :erpc.call(target_node, CodexBridge, :status, [bridge_name], timeout_ms)
+      end)
     end
   end
 
@@ -45,19 +54,20 @@ defmodule Hivebeam.Codex do
     Node.list()
   end
 
-  @spec cancel(node() | nil) :: :ok | {:error, term()}
-  def cancel(target_node \\ nil)
+  @spec cancel(node() | nil, keyword()) :: :ok | {:error, term()}
+  def cancel(target_node \\ nil, opts \\ [])
 
-  def cancel(nil), do: safe_local_call(fn -> CodexBridge.cancel_prompt() end)
+  def cancel(nil, opts), do: safe_local_call(fn -> CodexBridge.cancel_prompt(opts) end)
 
-  def cancel(target_node) when is_atom(target_node) do
+  def cancel(target_node, opts) when is_atom(target_node) do
     if target_node == Node.self() do
-      cancel(nil)
+      cancel(nil, opts)
     else
-      timeout_ms = CodexConfig.connect_timeout_ms()
+      timeout_ms =
+        normalize_timeout_ms(Keyword.get(opts, :timeout), CodexConfig.connect_timeout_ms())
 
       safe_remote_call(fn ->
-        :erpc.call(target_node, CodexBridge, :cancel_prompt, [[]], timeout_ms)
+        :erpc.call(target_node, CodexBridge, :cancel_prompt, [opts], timeout_ms)
       end)
     end
   end

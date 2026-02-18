@@ -7,18 +7,22 @@ services:
     user: node
     working_dir: /workspace
     environment:
+      HIVEBEAM_ACP_PROVIDER: ${HIVEBEAM_ACP_PROVIDER:-codex}
       HIVEBEAM_NODE_NAME: ${HIVEBEAM_NODE_NAME:-codex@localhost}
       HIVEBEAM_COOKIE: ${HIVEBEAM_COOKIE:-hivebeam_cookie}
       HIVEBEAM_CLUSTER_NODES: ${HIVEBEAM_CLUSTER_NODES:-}
       HIVEBEAM_ERL_DIST_PORT: ${HIVEBEAM_ERL_DIST_PORT:-9100}
       HIVEBEAM_BIND_IP: ${HIVEBEAM_BIND_IP:-0.0.0.0}
       HIVEBEAM_CODEX_ACP_CMD: ${HIVEBEAM_CODEX_ACP_CMD:-/usr/local/cargo/bin/codex-acp}
+      HIVEBEAM_CLAUDE_AGENT_ACP_CMD: ${HIVEBEAM_CLAUDE_AGENT_ACP_CMD:-claude-agent-acp}
       MIX_BUILD_ROOT: /home/node/.mix_build
       MIX_DEPS_PATH: /home/node/.mix_deps
       MIX_NO_INTERACTION: "1"
     volumes:
       - .:/workspace
       - codex-config:/home/node/.codex
+      - claude-config:/home/node/.claude
+      - claude-auth:/home/node/.config/claude-code
       - codex-mix-build:/home/node/.mix_build
       - codex-mix-deps:/home/node/.mix_deps
     ports:
@@ -31,9 +35,11 @@ services:
     command:
       - sh
       - -lc
-      - mix deps.get && mix compile && ERL_AFLAGS="-name ${HIVEBEAM_NODE_NAME:-codex@localhost} -setcookie ${HIVEBEAM_COOKIE:-hivebeam_cookie} -kernel inet_dist_listen_min ${HIVEBEAM_ERL_DIST_PORT:-9100} inet_dist_listen_max ${HIVEBEAM_ERL_DIST_PORT:-9100}" mix codex.bridge.run
+      - mkdir -p /home/node/.claude /home/node/.config/claude-code && ln -sfn /home/node/.claude/claude-global-state.json /home/node/.claude.json && mix deps.get && mix compile && ERL_AFLAGS="-name ${HIVEBEAM_NODE_NAME:-codex@localhost} -setcookie ${HIVEBEAM_COOKIE:-hivebeam_cookie} -kernel inet_dist_listen_min ${HIVEBEAM_ERL_DIST_PORT:-9100} inet_dist_listen_max ${HIVEBEAM_ERL_DIST_PORT:-9100}" mix agents.bridge.run
 
 volumes:
   codex-config:
+  claude-config:
+  claude-auth:
   codex-mix-build:
   codex-mix-deps:

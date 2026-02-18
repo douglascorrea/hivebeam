@@ -1,0 +1,317 @@
+defmodule Mix.Tasks.Agents.Live do
+  use Mix.Task
+
+  alias Hivebeam.BridgeCatalog
+  alias Hivebeam.Codex
+  alias Hivebeam.CodexChatUi
+  alias Hivebeam.CodexCli
+
+  @shortdoc "Realtime local/remote prompts using all available ACP bridges"
+
+  @switches [
+    node: :keep,
+    remote_ip: :keep,
+    remote_self: :boolean,
+    remote_name: :string,
+    local: :boolean,
+    message: :string,
+    chat: :boolean,
+    timeout: :integer,
+    stream: :boolean,
+    thoughts: :boolean,
+    tools: :boolean,
+    approve: :string,
+    providers: :string,
+    name: :string,
+    host_ip: :string,
+    cookie: :string,
+    dist_port: :integer,
+    epmd: :string
+  ]
+
+  @aliases [
+    n: :node,
+    m: :message,
+    t: :timeout,
+    c: :cookie
+  ]
+
+  @discovery_attempts 15
+  @discovery_delay_ms 200
+
+  @impl Mix.Task
+  def run(args) do
+    Mix.Task.run("app.start")
+
+    {opts, _argv, invalid} = OptionParser.parse(args, strict: @switches, aliases: @aliases)
+    validate_invalid!(invalid)
+
+    approval_mode = CodexCli.parse_approval_mode!(Keyword.get(opts, :approve, "ask"))
+    provider_specs = parse_provider_specs(opts)
+    {nodes, remote_nodes} = build_nodes(opts)
+
+    ensure_distribution!(remote_nodes, opts)
+    connect_remote_targets!(remote_nodes)
+
+    targets = discover_targets(nodes, provider_specs, @discovery_attempts)
+
+    if targets == [] do
+      Mix.raise(
+        "No available bridges found. Start remote with `mix agents.bridge.run` (or `mix codex.bridge.run` / `mix claude.bridge.run`) and retry."
+      )
+    end
+
+    prompt_opts = [
+      timeout: Keyword.get(opts, :timeout),
+      stream: Keyword.get(opts, :stream, true),
+      show_thoughts: Keyword.get(opts, :thoughts, true),
+      show_tools: Keyword.get(opts, :tools, true),
+      approval_mode: approval_mode
+    ]
+
+    if Keyword.get(opts, :chat, false) do
+      run_chat(targets, prompt_opts, Keyword.get(opts, :message))
+    else
+      message = required!(opts, :message, "--message")
+
+      Enum.each(targets, fn target ->
+        run_prompt!(target, message, prompt_opts)
+      end)
+    end
+  end
+
+  defp run_chat(targets, prompt_opts, first_message) do
+    case CodexChatUi.run(targets, prompt_opts, first_message) do
+      {:ok, _result} ->
+        :ok
+
+      {:error, reason} ->
+        Mix.raise("Chat UI failed: #{inspect(reason)}")
+    end
+  end
+
+  defp run_prompt!(target, message, prompt_opts) do
+    Mix.shell().info("[#{target_label(target)}] prompt: #{message}")
+
+    case CodexCli.prompt(target, message, prompt_opts) do
+      {:ok, result} ->
+        Mix.shell().info("[#{target_label(target)}] session_id=#{result.session_id}")
+        Mix.shell().info("[#{target_label(target)}] stop_reason=#{result.stop_reason}")
+
+      {:error, reason} ->
+        Mix.raise("Prompt failed for #{target_label(target)}: #{inspect(reason)}")
+    end
+  end
+
+  defp parse_provider_specs(opts) do
+    providers =
+      opts
+      |> Keyword.get(:providers)
+      |> case do
+        nil ->
+          nil
+
+        value ->
+          value
+          |> String.split(",")
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+      end
+
+    specs = BridgeCatalog.provider_specs_for(providers)
+
+    if specs == [] do
+      Mix.raise("No valid providers selected. Use --providers codex,claude")
+    end
+
+    specs
+  end
+
+  defp build_nodes(opts) do
+    remote_name = Keyword.get(opts, :remote_name, "codex")
+    remote_self? = Keyword.get(opts, :remote_self, false)
+
+    nodes_from_flag =
+      opts
+      |> Keyword.get_values(:node)
+      |> Enum.flat_map(&split_csv/1)
+      |> Enum.map(&String.to_atom/1)
+
+    nodes_from_ip =
+      opts
+      |> Keyword.get_values(:remote_ip)
+      |> Enum.flat_map(&split_csv/1)
+      |> Enum.map(fn ip -> String.to_atom("#{remote_name}@#{ip}") end)
+
+    nodes_from_self =
+      if remote_self? do
+        host_ip = Keyword.get(opts, :host_ip) || detect_host_ip()
+        [String.to_atom("#{remote_name}@#{host_ip}")]
+      else
+        []
+      end
+
+    remote_nodes = Enum.uniq(nodes_from_flag ++ nodes_from_ip ++ nodes_from_self)
+    include_local? = Keyword.get(opts, :local, false) or remote_nodes == []
+
+    nodes =
+      if(include_local?, do: [nil], else: [])
+      |> Kernel.++(remote_nodes)
+      |> Enum.uniq()
+
+    {nodes, remote_nodes}
+  end
+
+  defp discover_targets(nodes, provider_specs, attempts_left) do
+    targets =
+      nodes
+      |> Enum.flat_map(fn node ->
+        provider_specs
+        |> Enum.flat_map(fn %{provider: _provider, bridge_name: bridge_name} ->
+          case Codex.status(node, bridge_name: bridge_name) do
+            {:ok, %{connected: true}} ->
+              [BridgeCatalog.target(node, bridge_name)]
+
+            _ ->
+              []
+          end
+        end)
+      end)
+      |> Enum.uniq()
+
+    cond do
+      targets != [] ->
+        targets
+
+      attempts_left > 1 ->
+        Process.sleep(@discovery_delay_ms)
+        discover_targets(nodes, provider_specs, attempts_left - 1)
+
+      true ->
+        []
+    end
+  end
+
+  defp split_csv(value) do
+    value
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp ensure_distribution!([], _opts), do: :ok
+
+  defp ensure_distribution!(remote_targets, opts) do
+    cookie = String.to_atom(Keyword.get(opts, :cookie, "hivebeam_cookie"))
+
+    if Node.alive?() do
+      Node.set_cookie(cookie)
+    else
+      epmd = Keyword.get(opts, :epmd, "127.0.0.1")
+      host_ip = Keyword.get(opts, :host_ip) || detect_host_ip()
+      node_label = Keyword.get(opts, :name, "host")
+      dist_port = Keyword.get(opts, :dist_port, 9101)
+
+      System.put_env("ERL_EPMD_ADDRESS", epmd)
+      :application.set_env(:kernel, :inet_dist_listen_min, dist_port)
+      :application.set_env(:kernel, :inet_dist_listen_max, dist_port)
+
+      node_name = String.to_atom("#{node_label}@#{host_ip}")
+
+      case Node.start(node_name, :longnames) do
+        {:ok, _pid} ->
+          :ok
+
+        {:error, {:already_started, _pid}} ->
+          :ok
+
+        {:error, reason} ->
+          Mix.raise("Could not start distributed node #{node_name}: #{inspect(reason)}")
+      end
+
+      Node.set_cookie(cookie)
+
+      Mix.shell().info("Distributed host node started as #{Node.self()}")
+      Mix.shell().info("Using EPMD #{epmd} with distribution port #{dist_port}")
+    end
+
+    Mix.shell().info("Target remotes: #{Enum.map_join(remote_targets, ", ", &to_string/1)}")
+  end
+
+  defp connect_remote_targets!([]), do: :ok
+
+  defp connect_remote_targets!(nodes) do
+    Enum.each(nodes, fn node ->
+      case Node.ping(node) do
+        :pong -> Mix.shell().info("Connected to #{node}")
+        :pang -> Mix.raise("Could not connect to remote node #{node}")
+      end
+    end)
+  end
+
+  defp detect_host_ip do
+    with {:ok, ifaddrs} <- :inet.getifaddrs(),
+         ip when not is_nil(ip) <- first_non_loopback_ipv4(ifaddrs) do
+      ip
+      |> :inet.ntoa()
+      |> to_string()
+    else
+      _ -> "127.0.0.1"
+    end
+  end
+
+  defp first_non_loopback_ipv4(ifaddrs) do
+    Enum.find_value(ifaddrs, fn {_iface, attrs} ->
+      flags = Keyword.get(attrs, :flags, [])
+
+      if :up in flags do
+        attrs
+        |> Enum.filter(fn
+          {:addr, ip} -> is_tuple(ip) and tuple_size(ip) == 4
+          _ -> false
+        end)
+        |> Enum.map(fn {:addr, ip} -> ip end)
+        |> Enum.find(fn {a, _, _, _} = ip ->
+          ip != {127, 0, 0, 1} and a != 127
+        end)
+      else
+        nil
+      end
+    end)
+  end
+
+  defp target_label(%{node: node, bridge_name: bridge_name}) do
+    base =
+      if(is_nil(node),
+        do: if(Node.alive?(), do: to_string(Node.self()), else: "local"),
+        else: to_string(node)
+      )
+
+    if to_string(bridge_name) in ["Elixir.Hivebeam.CodexBridge", "Hivebeam.CodexBridge"] do
+      base
+    else
+      provider =
+        bridge_name
+        |> to_string()
+        |> String.split(".")
+        |> List.last()
+        |> String.replace_suffix("Bridge", "")
+        |> Macro.underscore()
+
+      "#{base} [#{provider}]"
+    end
+  end
+
+  defp required!(opts, key, flag) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} -> value
+      :error -> Mix.raise("Missing required option #{flag}")
+    end
+  end
+
+  defp validate_invalid!([]), do: :ok
+
+  defp validate_invalid!(invalid) do
+    Mix.raise("Invalid options: #{Enum.map_join(invalid, ", ", &inspect/1)}")
+  end
+end

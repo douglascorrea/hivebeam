@@ -1,24 +1,46 @@
 defmodule Hivebeam.CodexConfig do
   @moduledoc false
 
+  @default_acp_provider "codex"
   @default_acp_command "codex-acp"
+  @default_claude_acp_command "claude-agent-acp"
   @default_cluster_retry_ms 5_000
   @default_prompt_timeout_ms 120_000
   @default_connect_timeout_ms 30_000
   @default_bridge_name Hivebeam.CodexBridge
 
-  @spec acp_command() :: {:ok, {String.t(), [String.t()]}} | {:error, term()}
-  def acp_command do
-    case System.get_env("HIVEBEAM_CODEX_ACP_CMD") do
-      nil ->
-        parse_acp_command(default_acp_command())
+  @spec acp_provider() :: String.t()
+  def acp_provider do
+    @default_acp_provider
+    |> env("HIVEBEAM_ACP_PROVIDER")
+    |> String.trim()
+    |> String.downcase()
+    |> case do
+      "" -> @default_acp_provider
+      provider -> provider
+    end
+  end
 
-      value when is_binary(value) ->
-        if String.trim(value) == "" do
-          parse_acp_command(default_acp_command())
-        else
-          parse_acp_command(value)
-        end
+  @spec acp_command() :: {:ok, {String.t(), [String.t()]}} | {:error, term()}
+  def acp_command, do: acp_command(acp_provider())
+
+  @spec acp_command(String.t() | atom()) :: {:ok, {String.t(), [String.t()]}} | {:error, term()}
+  def acp_command(provider) when is_atom(provider) do
+    provider
+    |> Atom.to_string()
+    |> acp_command()
+  end
+
+  def acp_command(provider) when is_binary(provider) do
+    case provider |> String.trim() |> String.downcase() do
+      "codex" ->
+        command_from_env("HIVEBEAM_CODEX_ACP_CMD", default_acp_command())
+
+      "claude" ->
+        command_from_env("HIVEBEAM_CLAUDE_AGENT_ACP_CMD", default_claude_acp_command())
+
+      provider ->
+        {:error, {:unsupported_acp_provider, provider}}
     end
   end
 
@@ -26,6 +48,9 @@ defmodule Hivebeam.CodexConfig do
   def default_acp_command do
     discover_local_acp_path() || @default_acp_command
   end
+
+  @spec default_claude_acp_command() :: String.t()
+  def default_claude_acp_command, do: @default_claude_acp_command
 
   @spec parse_acp_command(String.t() | nil) ::
           {:ok, {String.t(), [String.t()]}} | {:error, term()}
@@ -40,6 +65,30 @@ defmodule Hivebeam.CodexConfig do
       [path | args] -> {:ok, {path, args}}
     end
   end
+
+  @spec command_available?({String.t(), [String.t()]} | {:ok, {String.t(), [String.t()]}}) ::
+          boolean()
+  def command_available?({:ok, command}), do: command_available?(command)
+
+  def command_available?({path, _args}) when is_binary(path) do
+    cond do
+      path == "" ->
+        false
+
+      Path.type(path) == :absolute ->
+        File.exists?(path)
+
+      String.starts_with?(path, "./") or String.starts_with?(path, "../") ->
+        path
+        |> Path.expand(File.cwd!())
+        |> File.exists?()
+
+      true ->
+        not is_nil(System.find_executable(path))
+    end
+  end
+
+  def command_available?(_), do: false
 
   @spec cluster_nodes() :: [node()]
   def cluster_nodes do
@@ -134,6 +183,20 @@ defmodule Hivebeam.CodexConfig do
         case Integer.parse(String.trim(value)) do
           {parsed, ""} when parsed > 0 -> parsed
           _ -> default
+        end
+    end
+  end
+
+  defp command_from_env(env_name, default_command) do
+    case System.get_env(env_name) do
+      nil ->
+        parse_acp_command(default_command)
+
+      value when is_binary(value) ->
+        if String.trim(value) == "" do
+          parse_acp_command(default_command)
+        else
+          parse_acp_command(value)
         end
     end
   end

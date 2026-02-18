@@ -59,6 +59,7 @@ defmodule Hivebeam.CodexBridge do
     config = Keyword.get(opts, :config, %{})
     acpex_module = Keyword.get(opts, :acpex_module, ACPex)
     connection_module = Keyword.get(opts, :connection_module, ACPex.Protocol.Connection)
+    acp_provider = normalize_provider(Map.get(config, :acp_provider, CodexConfig.acp_provider()))
 
     bridge_name =
       Keyword.get(opts, :name, Map.get(config, :bridge_name, CodexConfig.bridge_name()))
@@ -77,6 +78,7 @@ defmodule Hivebeam.CodexBridge do
     state = %{
       acpex_module: acpex_module,
       connection_module: connection_module,
+      acp_provider: acp_provider,
       bridge_name: bridge_name,
       agent_path: agent_path,
       agent_args: agent_args,
@@ -111,8 +113,10 @@ defmodule Hivebeam.CodexBridge do
       node: Node.self(),
       node_alive: Node.alive?(),
       connected_nodes: Node.list(),
+      bridge_name: state.bridge_name,
       status: state.status,
       connected: state.status == :connected,
+      acp_provider: state.acp_provider,
       session_id: state.session_id,
       connection_pid: state.conn_pid,
       in_flight_prompt: not is_nil(state.in_flight_prompt),
@@ -143,6 +147,7 @@ defmodule Hivebeam.CodexBridge do
         notify_prompt_stream(state, %{
           event: :status,
           node: Node.self(),
+          bridge_name: state.bridge_name,
           session_id: state.session_id,
           message: "cancel_requested"
         })
@@ -193,6 +198,7 @@ defmodule Hivebeam.CodexBridge do
         notify_stream_targets(stream_targets, %{
           event: :start,
           node: Node.self(),
+          bridge_name: state.bridge_name,
           session_id: state.session_id
         })
 
@@ -206,6 +212,7 @@ defmodule Hivebeam.CodexBridge do
       notify_prompt_stream(state, %{
         event: :update,
         node: Node.self(),
+        bridge_name: state.bridge_name,
         session_id: session_id,
         update: update
       })
@@ -226,6 +233,7 @@ defmodule Hivebeam.CodexBridge do
     notify_stream_targets(in_flight.stream_targets, %{
       event: :done,
       node: Node.self(),
+      bridge_name: state.bridge_name,
       session_id: state.session_id,
       reply: reply
     })
@@ -248,6 +256,7 @@ defmodule Hivebeam.CodexBridge do
     notify_stream_targets(in_flight.stream_targets, %{
       event: :error,
       node: Node.self(),
+      bridge_name: state.bridge_name,
       session_id: state.session_id,
       reason: {:prompt_task_down, reason}
     })
@@ -257,7 +266,9 @@ defmodule Hivebeam.CodexBridge do
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{conn_monitor_ref: ref} = state) do
-    Logger.warning("Codex ACP connection dropped: #{inspect(reason)}")
+    Logger.warning(
+      "#{provider_title(state.acp_provider)} ACP connection dropped: #{inspect(reason)}"
+    )
 
     state
     |> mark_disconnected({:connection_down, reason})
@@ -435,7 +446,7 @@ defmodule Hivebeam.CodexBridge do
             monitor_ref = Process.monitor(conn_pid)
 
             Logger.info(
-              "Codex bridge connected on #{Node.self()} with session #{session_id} via #{state.agent_path}"
+              "#{provider_title(state.acp_provider)} bridge connected on #{Node.self()} with session #{session_id} via #{state.agent_path}"
             )
 
             %{
@@ -526,6 +537,7 @@ defmodule Hivebeam.CodexBridge do
         notify_stream_targets(in_flight.stream_targets, %{
           event: :error,
           node: Node.self(),
+          bridge_name: state.bridge_name,
           session_id: state.session_id,
           reason: reason
         })
@@ -624,6 +636,7 @@ defmodule Hivebeam.CodexBridge do
         ref: ref,
         reply_to: self(),
         node: Node.self(),
+        bridge_name: state.bridge_name,
         session_id: state.session_id,
         request: request
       }
@@ -661,4 +674,24 @@ defmodule Hivebeam.CodexBridge do
 
   defp normalize_timeout_ms(value, _default) when is_integer(value) and value > 0, do: value
   defp normalize_timeout_ms(_value, default), do: default
+
+  defp normalize_provider(provider) when is_binary(provider) do
+    provider
+    |> String.trim()
+    |> String.downcase()
+    |> case do
+      "" -> "codex"
+      value -> value
+    end
+  end
+
+  defp normalize_provider(provider) when is_atom(provider) do
+    provider |> Atom.to_string() |> normalize_provider()
+  end
+
+  defp normalize_provider(_provider), do: "codex"
+
+  defp provider_title("claude"), do: "Claude"
+  defp provider_title("codex"), do: "Codex"
+  defp provider_title(other), do: String.capitalize(other)
 end

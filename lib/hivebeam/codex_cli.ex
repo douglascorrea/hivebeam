@@ -6,7 +6,7 @@ defmodule Hivebeam.CodexCli do
 
   @stream_poll_ms 50
 
-  @spec prompt(node() | nil, String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  @spec prompt(node() | nil | map(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def prompt(target_node, message, opts \\ []) when is_binary(message) do
     shell = Keyword.get(opts, :shell, Mix.shell())
     timeout = Keyword.get(opts, :timeout)
@@ -93,40 +93,44 @@ defmodule Hivebeam.CodexCli do
   end
 
   defp render_prompt_stream(payload, state) do
+    stream_label = stream_label(payload)
+
     case fetch(payload, :event) do
       event when event in [:start, "start", :done, "done"] ->
         :ok
 
       event when event in [:error, "error"] ->
         reason = fetch(payload, :reason)
-        state.shell.error("Prompt stream error: #{inspect(reason)}")
+        state.shell.error("[#{stream_label}] Prompt stream error: #{inspect(reason)}")
 
       event when event in [:update, "update"] ->
-        render_update(fetch(payload, :update), fetch(payload, :node), state)
+        render_update(fetch(payload, :update), stream_label, state)
 
       _ ->
         :ok
     end
   end
 
-  defp render_update(update, node_name, state) when is_map(update) do
+  defp render_update(update, stream_label, state) when is_map(update) do
     kind = CodexStream.update_kind(update)
-    node_label = node_name |> to_string()
 
     cond do
       kind == "agent_thought_chunk" and state.show_thoughts? ->
         update
         |> CodexStream.thought_chunks()
-        |> Enum.each(fn chunk -> state.shell.info("[#{node_label} thought] #{chunk}") end)
+        |> Enum.each(fn chunk -> state.shell.info("[#{stream_label} thought] #{chunk}") end)
 
       kind == "agent_message_chunk" ->
         update
         |> CodexStream.message_chunks()
-        |> Enum.each(fn chunk -> state.shell.info("[#{node_label}] #{chunk}") end)
+        |> Enum.each(fn chunk -> state.shell.info("[#{stream_label}] #{chunk}") end)
 
       kind in ["tool_call", "tool_call_update"] and state.show_tools? ->
         activity = CodexStream.tool_activity(update)
-        state.shell.info("[#{node_label} tool] #{activity}: #{CodexStream.tool_summary(update)}")
+
+        state.shell.info(
+          "[#{stream_label} tool] #{activity}: #{CodexStream.tool_summary(update)}"
+        )
 
       true ->
         :ok
@@ -152,7 +156,7 @@ defmodule Hivebeam.CodexCli do
   end
 
   defp approval_prompt(payload) do
-    node_name = fetch(payload, :node)
+    node_name = stream_label(payload)
     request = fetch(payload, :request) || %{}
     operation = fetch(request, :operation) || "tool"
     details = fetch(request, :details)
@@ -173,6 +177,12 @@ defmodule Hivebeam.CodexCli do
 
   defp fetch(_map, _key), do: nil
 
+  defp call_prompt(%{} = target, message, opts) do
+    node = target_node(target)
+    bridge_name = target_bridge_name(target)
+    call_prompt(node, message, maybe_put_bridge_name(opts, bridge_name))
+  end
+
   defp call_prompt(nil, message, opts), do: Codex.prompt(message, opts)
   defp call_prompt(node, message, opts) when is_atom(node), do: Codex.prompt(node, message, opts)
 
@@ -190,5 +200,52 @@ defmodule Hivebeam.CodexCli do
     opts
     |> Keyword.put(:approval_mode, approval_mode)
     |> Keyword.put(:approval_to, caller_pid)
+  end
+
+  defp maybe_put_bridge_name(opts, nil), do: opts
+  defp maybe_put_bridge_name(opts, bridge_name), do: Keyword.put(opts, :bridge_name, bridge_name)
+
+  defp target_node(target) when is_map(target) do
+    Map.get(target, :node) || Map.get(target, "node")
+  end
+
+  defp target_bridge_name(target) when is_map(target) do
+    Map.get(target, :bridge_name) || Map.get(target, "bridge_name")
+  end
+
+  defp stream_label(payload) do
+    node = fetch(payload, :node)
+    bridge_name = fetch(payload, :bridge_name)
+    format_target_label(node, bridge_name)
+  end
+
+  defp format_target_label(node, bridge_name) do
+    base = node_label(node)
+
+    case bridge_label(bridge_name) do
+      nil -> base
+      label -> "#{base} [#{label}]"
+    end
+  end
+
+  defp node_label(nil), do: if(Node.alive?(), do: to_string(Node.self()), else: "local")
+  defp node_label(node) when is_atom(node), do: to_string(node)
+  defp node_label(node) when is_binary(node), do: node
+  defp node_label(other), do: inspect(other)
+
+  defp bridge_label(nil), do: nil
+
+  defp bridge_label(bridge_name) do
+    normalized = to_string(bridge_name)
+
+    if normalized in ["Elixir.Hivebeam.CodexBridge", "Hivebeam.CodexBridge"] do
+      nil
+    else
+      normalized
+      |> String.split(".")
+      |> List.last()
+      |> String.replace_suffix("Bridge", "")
+      |> Macro.underscore()
+    end
   end
 end

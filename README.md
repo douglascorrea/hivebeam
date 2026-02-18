@@ -41,7 +41,7 @@ docker compose exec codex-node mix node.send --host host.docker.internal --port 
 
 ### What it does
 
-- Each node runs a local `codex-acp` subprocess over stdio.
+- Each node runs a local ACP subprocess over stdio (`codex-acp` or `claude-agent-acp`).
 - `Hivebeam.CodexBridge` keeps one long-lived ACP session.
 - Cross-node prompt calls use `:erpc`.
 - Prompt calls can stream thought/message/tool updates in real time.
@@ -49,7 +49,7 @@ docker compose exec codex-node mix node.send --host host.docker.internal --port 
 
 ### Docker node startup (auto)
 
-`docker-compose.yml` auto-starts `mix codex.bridge.run`.
+`docker-compose.yml` auto-starts `mix agents.bridge.run` (Codex + Claude when available).
 
 Defaults:
 
@@ -57,7 +57,9 @@ Defaults:
 - cookie: `hivebeam_cookie`
 - distribution port: `9100`
 - bind IP for exposed dist ports: `0.0.0.0` (`HIVEBEAM_BIND_IP`)
-- ACP command: `/usr/local/cargo/bin/codex-acp`
+- ACP provider: `codex` (`HIVEBEAM_ACP_PROVIDER`)
+- Codex ACP command: `/usr/local/cargo/bin/codex-acp` (`HIVEBEAM_CODEX_ACP_CMD`)
+- Claude ACP command: `claude-agent-acp` (`HIVEBEAM_CLAUDE_AGENT_ACP_CMD`)
 
 The Docker image installs `codex-acp` from the fork configured in `Dockerfile.codex`:
 
@@ -73,10 +75,83 @@ For local (non-Docker) runs, if `HIVEBEAM_CODEX_ACP_CMD` is not set, the bridge 
 - `/usr/local/cargo/bin/codex-acp`
 - `codex-acp` from `PATH`
 
+Provider summary:
+
+| Provider (`HIVEBEAM_ACP_PROVIDER`) | Default command                | Override env                    |
+|------------------------------------|--------------------------------|---------------------------------|
+| `codex`                            | autodiscovered `codex-acp`     | `HIVEBEAM_CODEX_ACP_CMD`        |
+| `claude`                           | `claude-agent-acp` from `PATH` | `HIVEBEAM_CLAUDE_AGENT_ACP_CMD` |
+
 Bring it up:
 
 ```bash
 docker compose up -d --build
+```
+
+### Claude Code nodes (login auth, no API key)
+
+`claude-agent-acp` uses Claude Code authentication. Run login once on the remote node, then start the bridge with the Claude provider.
+
+Authenticate inside the running Docker node (persists in `/home/node/.claude`, `/home/node/.claude.json`, and `/home/node/.config/claude-code`):
+
+```bash
+docker compose up -d --build
+docker compose exec -it codex-node claude
+# inside Claude REPL:
+# /login
+```
+
+Start a remote Claude bridge node:
+
+```bash
+LAN_IP=$(ipconfig getifaddr en0)
+HIVEBEAM_ACP_PROVIDER=claude HIVEBEAM_NODE_NAME=claude@$LAN_IP HIVEBEAM_BIND_IP=$LAN_IP docker compose up -d --build
+```
+
+Connect from host:
+
+```bash
+mix codex.live --remote-name claude --remote-self --chat
+```
+
+Same flow with the Claude wrapper task:
+
+```bash
+mix claude.live --remote-self --chat
+```
+
+Or start a local Claude bridge directly:
+
+```bash
+mix claude.bridge.run
+```
+
+### One-command dual-provider mode (Codex + Claude)
+
+Start all available providers on a remote node:
+
+```bash
+mix agents.bridge.run
+```
+
+`agents.bridge.run` keeps Codex as default and auto-starts Claude when `claude-agent-acp` is installed and callable.
+
+From host, connect to all available providers on local/remotes:
+
+```bash
+mix agents.live --remote-self --chat
+```
+
+Multiple remotes:
+
+```bash
+mix agents.live --node codex@10.0.0.20 --node codex@10.0.0.30 --chat
+```
+
+Optional provider filter:
+
+```bash
+mix agents.live --providers codex --remote-self --chat
 ```
 
 ### Host + Docker on same machine
@@ -138,6 +213,8 @@ Controls:
 
 If `/targets` shows `host@...`, you are talking to the local bridge. For Docker remote chat you should see `codex@<ip>`.
 
+For Claude remotes, use `--remote-name claude` (or explicit `--node claude@<ip>`) so target discovery matches the Claude node name.
+
 Broadcast one prompt to local + multiple remotes:
 
 ```bash
@@ -181,6 +258,12 @@ mix codex.status --node codex@10.0.0.20
 - **Node unreachable**: verify `4369` and distribution ports are open/mapped.
 - **Bridge degraded**: check `mix codex.status` and `last_error`.
 - **No Codex auth**: ensure `~/.codex/auth.json` exists on the node running `codex-acp`.
+- **Claude login required**:
+  - run `claude /login` on the same node/container where `claude-agent-acp` runs.
+  - if prompt fails with `Please run /login`, the Claude session is missing or expired.
+  - avoid `docker compose run --rm ...` for login state; use `docker compose exec ...` on the running service so auth files are written to the persisted service volumes.
+- **`Executable not found in PATH: claude-agent-acp`**:
+  - install `@zed-industries/claude-agent-acp` or set `HIVEBEAM_CLAUDE_AGENT_ACP_CMD` to an absolute path.
 - **`Executable not found in PATH: codex-acp`**:
   - local host bridge: install/build `codex-acp` in one of the auto-discovery paths above, or set `HIVEBEAM_CODEX_ACP_CMD` to an absolute binary path.
   - Docker remote: ensure container node name matches your host IP:
@@ -193,7 +276,11 @@ mix codex.live --remote-self --chat
 
 ## Mix tasks
 
+- `mix agents.bridge.run`
+- `mix agents.live --chat`
 - `mix codex.bridge.run`
+- `mix claude.bridge.run`
+- `mix claude.live --chat`
 - `mix codex.live --message "..."`
 - `mix codex.live --chat`
 - `mix codex.prompt --message "..."`

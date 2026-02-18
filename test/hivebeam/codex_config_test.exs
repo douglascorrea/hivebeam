@@ -6,7 +6,9 @@ defmodule Hivebeam.CodexConfigTest do
   test "uses defaults when env vars are missing" do
     with_env(
       [
+        {"HIVEBEAM_ACP_PROVIDER", nil},
         {"HIVEBEAM_CODEX_ACP_CMD", nil},
+        {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", nil},
         {"HIVEBEAM_CLUSTER_NODES", nil},
         {"HIVEBEAM_CLUSTER_RETRY_MS", nil},
         {"HIVEBEAM_CODEX_PROMPT_TIMEOUT_MS", nil},
@@ -14,6 +16,7 @@ defmodule Hivebeam.CodexConfigTest do
         {"HIVEBEAM_CODEX_BRIDGE_NAME", nil}
       ],
       fn ->
+        assert CodexConfig.acp_provider() == "codex"
         assert {:ok, {command, []}} = CodexConfig.acp_command()
         assert is_binary(command) and command != ""
         assert CodexConfig.cluster_nodes() == []
@@ -28,7 +31,9 @@ defmodule Hivebeam.CodexConfigTest do
   test "parses command and cluster env vars" do
     with_env(
       [
+        {"HIVEBEAM_ACP_PROVIDER", "codex"},
         {"HIVEBEAM_CODEX_ACP_CMD", "docker compose exec -T codex-node codex-acp"},
+        {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", nil},
         {"HIVEBEAM_CLUSTER_NODES", "codex@node-a, codex@node-b"}
       ],
       fn ->
@@ -38,6 +43,55 @@ defmodule Hivebeam.CodexConfigTest do
         assert CodexConfig.cluster_nodes() == [:"codex@node-a", :"codex@node-b"]
       end
     )
+  end
+
+  test "uses claude provider command when configured" do
+    with_env(
+      [
+        {"HIVEBEAM_ACP_PROVIDER", "claude"},
+        {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", "docker compose exec -T claude-node claude-agent-acp"},
+        {"HIVEBEAM_CODEX_ACP_CMD", "docker compose exec -T codex-node codex-acp"}
+      ],
+      fn ->
+        assert CodexConfig.acp_provider() == "claude"
+
+        assert {:ok, {"docker", ["compose", "exec", "-T", "claude-node", "claude-agent-acp"]}} =
+                 CodexConfig.acp_command()
+      end
+    )
+  end
+
+  test "returns clear error for unsupported provider" do
+    with_env(
+      [
+        {"HIVEBEAM_ACP_PROVIDER", "unknown"},
+        {"HIVEBEAM_CODEX_ACP_CMD", nil},
+        {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", nil}
+      ],
+      fn ->
+        assert CodexConfig.acp_provider() == "unknown"
+        assert {:error, {:unsupported_acp_provider, "unknown"}} = CodexConfig.acp_command()
+      end
+    )
+  end
+
+  test "acp_command/1 can resolve explicit provider independent of env default" do
+    with_env(
+      [
+        {"HIVEBEAM_ACP_PROVIDER", "codex"},
+        {"HIVEBEAM_CODEX_ACP_CMD", "codex-acp"},
+        {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", "claude-agent-acp"}
+      ],
+      fn ->
+        assert {:ok, {"claude-agent-acp", []}} = CodexConfig.acp_command("claude")
+        assert {:ok, {"codex-acp", []}} = CodexConfig.acp_command("codex")
+      end
+    )
+  end
+
+  test "command_available?/1 validates executable path and PATH lookup" do
+    assert CodexConfig.command_available?({"this-command-should-not-exist-xyz", []}) == false
+    assert CodexConfig.command_available?({"/tmp/this-file-does-not-exist", []}) == false
   end
 
   test "falls back to defaults when integer envs are invalid" do
@@ -56,35 +110,48 @@ defmodule Hivebeam.CodexConfigTest do
   end
 
   test "parses custom bridge names" do
-    with_env([{"HIVEBEAM_CODEX_BRIDGE_NAME", "Hivebeam.CustomBridge"}], fn ->
-      assert CodexConfig.bridge_name() == Hivebeam.CustomBridge
-    end)
+    with_env(
+      [
+        {"HIVEBEAM_ACP_PROVIDER", "codex"},
+        {"HIVEBEAM_CODEX_BRIDGE_NAME", "Hivebeam.CustomBridge"}
+      ],
+      fn ->
+        assert CodexConfig.bridge_name() == Hivebeam.CustomBridge
+      end
+    )
   end
 
   test "prefers sibling codex-acp build when env command is not set" do
-    with_env([{"HIVEBEAM_CODEX_ACP_CMD", nil}], fn ->
-      with_temp_dir("acp_cfg", fn tmp_dir ->
-        app_dir = Path.join(tmp_dir, "hivebeam")
-        sibling_dir = Path.join(tmp_dir, "codex-acp")
-        release_dir = Path.join([sibling_dir, "target", "release"])
-        binary_path = Path.join(release_dir, "codex-acp")
+    with_env(
+      [
+        {"HIVEBEAM_ACP_PROVIDER", "codex"},
+        {"HIVEBEAM_CODEX_ACP_CMD", nil},
+        {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", nil}
+      ],
+      fn ->
+        with_temp_dir("acp_cfg", fn tmp_dir ->
+          app_dir = Path.join(tmp_dir, "hivebeam")
+          sibling_dir = Path.join(tmp_dir, "codex-acp")
+          release_dir = Path.join([sibling_dir, "target", "release"])
+          binary_path = Path.join(release_dir, "codex-acp")
 
-        File.mkdir_p!(app_dir)
-        File.mkdir_p!(release_dir)
-        File.write!(binary_path, "#!/bin/sh\nexit 0\n")
-        File.chmod!(binary_path, 0o755)
+          File.mkdir_p!(app_dir)
+          File.mkdir_p!(release_dir)
+          File.write!(binary_path, "#!/bin/sh\nexit 0\n")
+          File.chmod!(binary_path, 0o755)
 
-        with_cwd(app_dir, fn ->
-          expected_suffix = Path.join(["codex-acp", "target", "release", "codex-acp"])
-          default_command = CodexConfig.default_acp_command()
-          assert String.ends_with?(default_command, expected_suffix)
-          assert File.read!(default_command) == "#!/bin/sh\nexit 0\n"
-          assert {:ok, {resolved_path, []}} = CodexConfig.acp_command()
-          assert String.ends_with?(resolved_path, expected_suffix)
-          assert File.read!(resolved_path) == "#!/bin/sh\nexit 0\n"
+          with_cwd(app_dir, fn ->
+            expected_suffix = Path.join(["codex-acp", "target", "release", "codex-acp"])
+            default_command = CodexConfig.default_acp_command()
+            assert String.ends_with?(default_command, expected_suffix)
+            assert File.read!(default_command) == "#!/bin/sh\nexit 0\n"
+            assert {:ok, {resolved_path, []}} = CodexConfig.acp_command()
+            assert String.ends_with?(resolved_path, expected_suffix)
+            assert File.read!(resolved_path) == "#!/bin/sh\nexit 0\n"
+          end)
         end)
-      end)
-    end)
+      end
+    )
   end
 
   defp with_env(pairs, fun) do

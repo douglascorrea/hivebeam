@@ -21,14 +21,16 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --default-toolchain stable \
-    && npm install -g @openai/codex \
+    && npm install -g @anthropic-ai/claude-code @openai/codex @zed-industries/claude-agent-acp \
     && cargo install --locked --git "${CODEX_ACP_GIT_REPO}" --rev "${CODEX_ACP_GIT_REF}" codex-acp \
     && useradd --create-home --shell /bin/bash node \
+    && mkdir -p /home/node/.claude \
+    && mkdir -p /home/node/.config/claude-code \
     && mkdir -p /home/node/.codex \
     && mkdir -p /home/node/.mix_build \
     && mkdir -p /home/node/.mix_deps \
     && mkdir -p /workspace \
-    && chown -R node:node /home/node/.codex /home/node/.mix_build /home/node/.mix_deps /workspace
+    && chown -R node:node /home/node/.claude /home/node/.config /home/node/.codex /home/node/.mix_build /home/node/.mix_deps /workspace
 
 USER node
 

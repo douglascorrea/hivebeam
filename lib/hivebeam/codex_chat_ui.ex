@@ -428,6 +428,7 @@ defmodule Hivebeam.CodexChatUi do
       |> Enum.map(fn
         nil -> nil
         target when is_atom(target) -> target
+        target when is_map(target) -> target
       end)
       |> Enum.uniq()
 
@@ -470,7 +471,7 @@ defmodule Hivebeam.CodexChatUi do
       Task.start(fn ->
         result =
           try do
-            Codex.status(target)
+            call_status(target)
           rescue
             error ->
               {:error, {:status_task_error, Exception.message(error)}}
@@ -504,7 +505,7 @@ defmodule Hivebeam.CodexChatUi do
         Task.start(fn ->
           result =
             try do
-              Codex.cancel(target)
+              call_cancel(target)
             rescue
               error ->
                 {:error, {:cancel_task_error, Exception.message(error)}}
@@ -643,8 +644,36 @@ defmodule Hivebeam.CodexChatUi do
 
   defp call_prompt(nil, message, opts), do: Codex.prompt(message, opts)
 
+  defp call_prompt(target, message, opts) when is_map(target) do
+    node = Map.get(target, :node) || Map.get(target, "node")
+    bridge_name = Map.get(target, :bridge_name) || Map.get(target, "bridge_name")
+    opts = maybe_put_bridge_name(opts, bridge_name)
+    call_prompt(node, message, opts)
+  end
+
   defp call_prompt(target, message, opts) when is_atom(target),
     do: Codex.prompt(target, message, opts)
+
+  defp call_status(nil), do: Codex.status(nil)
+  defp call_status(target) when is_atom(target), do: Codex.status(target)
+
+  defp call_status(target) when is_map(target) do
+    node = Map.get(target, :node) || Map.get(target, "node")
+    bridge_name = Map.get(target, :bridge_name) || Map.get(target, "bridge_name")
+    Codex.status(node, bridge_name: bridge_name)
+  end
+
+  defp call_cancel(nil), do: Codex.cancel(nil)
+  defp call_cancel(target) when is_atom(target), do: Codex.cancel(target)
+
+  defp call_cancel(target) when is_map(target) do
+    node = Map.get(target, :node) || Map.get(target, "node")
+    bridge_name = Map.get(target, :bridge_name) || Map.get(target, "bridge_name")
+    Codex.cancel(node, bridge_name: bridge_name)
+  end
+
+  defp maybe_put_bridge_name(opts, nil), do: opts
+  defp maybe_put_bridge_name(opts, bridge_name), do: Keyword.put(opts, :bridge_name, bridge_name)
 
   defp format_approval_line(operation, details) do
     case {operation, details} do
@@ -706,14 +735,11 @@ defmodule Hivebeam.CodexChatUi do
   defp handle_stream_payload(payload, state) do
     case fetch(payload, :event) do
       event when event in [:start, "start"] ->
-        node = fetch(payload, :node) || Node.self()
-        start_activity(state, target_label(node))
+        start_activity(state, stream_target_label(payload))
 
       event when event in [:done, "done"] ->
-        node = fetch(payload, :node) || Node.self()
-
         state
-        |> finish_activity_for_label(target_label(node))
+        |> finish_activity_for_label(stream_target_label(payload))
         |> Map.put(:stream_indices, %{})
 
       event when event in [:error, "error"] ->
@@ -728,13 +754,11 @@ defmodule Hivebeam.CodexChatUi do
             _ -> "Status update received."
           end
 
-        node = fetch(payload, :node) || Node.self()
-        append_entry(state, :status, target_label(node), message)
+        append_entry(state, :status, stream_target_label(payload), message)
 
       event when event in [:update, "update"] ->
         update = fetch(payload, :update)
-        node = fetch(payload, :node) || Node.self()
-        render_stream_update(update, target_label(node), state)
+        render_stream_update(update, stream_target_label(payload), state)
 
       _ ->
         state
@@ -1330,11 +1354,49 @@ defmodule Hivebeam.CodexChatUi do
   defp entry_style(:system), do: Style.new(fg: :bright_black)
   defp entry_style(:error), do: Style.new(fg: {255, 192, 192}, bg: {66, 20, 20}, attrs: [:bold])
 
+  defp target_label(target) when is_map(target) do
+    node = Map.get(target, :node) || Map.get(target, "node")
+    bridge_name = Map.get(target, :bridge_name) || Map.get(target, "bridge_name")
+    format_target_label(node, bridge_name)
+  end
+
   defp target_label(nil) do
     if Node.alive?(), do: to_string(Node.self()), else: "local"
   end
 
   defp target_label(node) when is_atom(node), do: to_string(node)
+  defp target_label(node) when is_binary(node), do: node
+
+  defp stream_target_label(payload) do
+    node = fetch(payload, :node) || Node.self()
+    bridge_name = fetch(payload, :bridge_name)
+    format_target_label(node, bridge_name)
+  end
+
+  defp format_target_label(node, bridge_name) do
+    base = target_label(node)
+
+    case bridge_label(bridge_name) do
+      nil -> base
+      label -> "#{base} [#{label}]"
+    end
+  end
+
+  defp bridge_label(nil), do: nil
+
+  defp bridge_label(bridge_name) do
+    normalized = to_string(bridge_name)
+
+    if normalized in ["Elixir.Hivebeam.CodexBridge", "Hivebeam.CodexBridge"] do
+      nil
+    else
+      normalized
+      |> String.split(".")
+      |> List.last()
+      |> String.replace_suffix("Bridge", "")
+      |> Macro.underscore()
+    end
+  end
 
   defp drop_last_grapheme(""), do: ""
 
