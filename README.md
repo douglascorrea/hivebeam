@@ -5,7 +5,7 @@ Distributed multi-agent chat/orchestration for local and remote BEAM nodes.
 ## Install (release-first)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/douglascorrea/hivebeam/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/douglascorrea/hivebeam/master/install.sh | sh
 ```
 
 Default install root: `~/.local/hivebeam`.

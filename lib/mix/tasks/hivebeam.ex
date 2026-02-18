@@ -93,7 +93,7 @@ defmodule Mix.Tasks.Hivebeam do
     repo = Keyword.get(opts, :repo, "douglascorrea/hivebeam")
 
     install_command =
-      "curl -fsSL https://raw.githubusercontent.com/#{repo}/main/install.sh | sh -s -- --version #{version}"
+      "curl -fsSL https://raw.githubusercontent.com/#{repo}/master/install.sh | sh -s -- --version #{version}"
 
     case System.cmd("ssh", [remote, install_command], stderr_to_stdout: true) do
       {output, 0} -> Mix.shell().info(String.trim(output))
