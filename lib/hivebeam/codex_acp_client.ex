@@ -38,6 +38,18 @@ defmodule Hivebeam.CodexAcpClient do
     {:noreply, state}
   end
 
+  @impl true
+  def handle_info({:terminal_finished, _terminal_id, _result} = message, state) do
+    {:noreply, handle_terminal_message(message, state)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason} = message, state)
+      when is_map_key(state.terminal_monitors, ref) do
+    {:noreply, handle_terminal_message(message, state)}
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
+
   # ACP v0.9+ permission requests for tool executions and similar actions.
   # We bridge this into our existing approval flow and map the yes/no decision
   # to one of the option IDs provided by the agent.

@@ -24,7 +24,7 @@ defmodule Hivebeam.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:acpex, "~> 0.1"},
+      {:acpex, path: "vendor/acpex"},
       {:term_ui, git: "https://github.com/pcharbon70/term_ui.git"}
     ]
   end

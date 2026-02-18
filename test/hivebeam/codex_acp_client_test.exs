@@ -101,6 +101,40 @@ defmodule Hivebeam.CodexAcpClientTest do
              )
   end
 
+  test "updates terminal state from async terminal_finished messages" do
+    tmp_dir = unique_tmp_dir("codex_acp_terminal_async")
+
+    assert {:ok, state} =
+             CodexAcpClient.init(
+               bridge: self(),
+               tool_cwd: tmp_dir,
+               approval_fun: fn _request, _state -> {:ok, true} end
+             )
+
+    assert {:ok, %CreateResponse{terminal_id: terminal_id}, state} =
+             CodexAcpClient.handle_terminal_create(
+               %CreateRequest{
+                 session_id: "s1",
+                 command: "/bin/sh",
+                 args: ["-lc", "printf async-ok"]
+               },
+               state
+             )
+
+    assert_receive {:terminal_finished, ^terminal_id, result}, 1_000
+
+    assert {:noreply, state} =
+             CodexAcpClient.handle_info({:terminal_finished, terminal_id, result}, state)
+
+    assert {:ok, %OutputResponse{output: output, exit_status: %{"exitCode" => 0}}, _state} =
+             CodexAcpClient.handle_terminal_output(
+               %OutputRequest{session_id: "s1", terminal_id: terminal_id},
+               state
+             )
+
+    assert output =~ "async-ok"
+  end
+
   test "denies mutating operations when approval is rejected" do
     tmp_dir = unique_tmp_dir("codex_acp_deny")
 

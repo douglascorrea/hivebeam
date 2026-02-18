@@ -89,6 +89,28 @@ defmodule Hivebeam.CodexConfigTest do
     )
   end
 
+  test "default_claude_acp_command falls back to npx when claude-agent-acp is unavailable" do
+    with_temp_dir("claude_acp_path", fn tmp_dir ->
+      npx_path = Path.join(tmp_dir, "npx")
+      File.write!(npx_path, "#!/bin/sh\nexit 0\n")
+      File.chmod!(npx_path, 0o755)
+
+      with_env(
+        [
+          {"PATH", tmp_dir},
+          {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", nil}
+        ],
+        fn ->
+          assert CodexConfig.default_claude_acp_command() ==
+                   "npx -y @zed-industries/claude-agent-acp"
+
+          assert {:ok, {"npx", ["-y", "@zed-industries/claude-agent-acp"]}} =
+                   CodexConfig.acp_command("claude")
+        end
+      )
+    end)
+  end
+
   test "command_available?/1 validates executable path and PATH lookup" do
     assert CodexConfig.command_available?({"this-command-should-not-exist-xyz", []}) == false
     assert CodexConfig.command_available?({"/tmp/this-file-does-not-exist", []}) == false

@@ -58,8 +58,10 @@ defmodule Mix.Tasks.Agents.Live do
     targets = discover_targets(nodes, provider_specs, @discovery_attempts)
 
     if targets == [] do
+      diagnostics = bridge_diagnostics(nodes, provider_specs)
+
       Mix.raise(
-        "No available bridges found. Start remote with `mix agents.bridge.run` (or `mix codex.bridge.run` / `mix claude.bridge.run`) and retry."
+        "No available bridges found. Start remote with `mix agents.bridge.run` (or `mix codex.bridge.run` / `mix claude.bridge.run`) and retry.\n\n#{diagnostics}"
       )
     end
 
@@ -192,6 +194,32 @@ defmodule Mix.Tasks.Agents.Live do
       true ->
         []
     end
+  end
+
+  defp bridge_diagnostics(nodes, provider_specs) do
+    lines =
+      nodes
+      |> Enum.flat_map(fn node ->
+        Enum.map(provider_specs, fn %{provider: provider, bridge_name: bridge_name} ->
+          node_label = if(is_nil(node), do: "local", else: to_string(node))
+
+          case Codex.status(node, bridge_name: bridge_name) do
+            {:ok, status} ->
+              last_error =
+                case Map.get(status, :last_error) do
+                  nil -> ""
+                  reason -> " last_error=#{inspect(reason)}"
+                end
+
+              "  - #{node_label} [#{provider}] status=#{status.status} connected=#{status.connected}#{last_error}"
+
+            {:error, reason} ->
+              "  - #{node_label} [#{provider}] status_error=#{inspect(reason)}"
+          end
+        end)
+      end)
+
+    "Bridge diagnostics:\n" <> Enum.join(lines, "\n")
   end
 
   defp split_csv(value) do

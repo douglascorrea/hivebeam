@@ -19,6 +19,10 @@ defmodule Mix.Tasks.Codex.Bridge.Run do
           "Bridge status=#{status.status} session_id=#{inspect(status.session_id)} connected=#{status.connected}"
         )
 
+        if not status.connected and not is_nil(status.last_error) do
+          Mix.shell().info("Bridge last_error=#{inspect(status.last_error)}")
+        end
+
       {:error, reason} ->
         Mix.shell().error("Could not fetch bridge status: #{inspect(reason)}")
     end

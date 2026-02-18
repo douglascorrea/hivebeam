@@ -33,7 +33,8 @@ defmodule Hivebeam.NodeOrchestrator do
           compose_file: String.t(),
           remote_timeout_ms: pos_integer(),
           pid_file: String.t(),
-          log_file: String.t()
+          log_file: String.t(),
+          meta_file: String.t()
         }
 
   @spec up(keyword()) :: {:ok, runtime(), String.t()} | {:error, term()}
@@ -43,13 +44,14 @@ defmodule Hivebeam.NodeOrchestrator do
          :ok <- ensure_local_bind_ip_if_needed(runtime),
          :ok <- ensure_compose_file_if_needed(runtime),
          {:ok, output} <- run_up(runtime) do
+      _ = persist_runtime_metadata(runtime)
       {:ok, runtime, output}
     end
   end
 
   @spec down(keyword()) :: {:ok, runtime(), String.t()} | {:error, term()}
   def down(opts) do
-    with {:ok, runtime} <- build_runtime(opts),
+    with {:ok, runtime} <- build_runtime(Keyword.put_new(opts, :hydrate_metadata, true)),
          :ok <- ensure_remote_path(runtime),
          :ok <- ensure_compose_file_if_needed(runtime),
          {:ok, output} <- run_down(runtime) do
@@ -74,7 +76,7 @@ defmodule Hivebeam.NodeOrchestrator do
         end
 
       _name ->
-        with {:ok, runtime} <- build_runtime(opts),
+        with {:ok, runtime} <- build_runtime(Keyword.put_new(opts, :hydrate_metadata, true)),
              :ok <- ensure_remote_path(runtime),
              :ok <- ensure_compose_file_if_needed(runtime),
              result <- inspect_one(runtime) do
@@ -86,8 +88,16 @@ defmodule Hivebeam.NodeOrchestrator do
   @spec build_runtime(keyword()) :: {:ok, runtime()} | {:error, term()}
   def build_runtime(opts) do
     cwd = Keyword.get(opts, :cwd, File.cwd!())
+    hydrate_metadata? = Keyword.get(opts, :hydrate_metadata, false)
 
     with {:ok, name} <- required_string(opts, :name) do
+      opts =
+        if hydrate_metadata? do
+          hydrate_opts_from_runtime_metadata(opts, cwd, name)
+        else
+          opts
+        end
+
       slot = normalize_slot(Keyword.get(opts, :slot), name)
       provider = normalize_provider(Keyword.get(opts, :provider, @default_provider))
       docker = Keyword.get(opts, :docker, false) == true
@@ -107,6 +117,7 @@ defmodule Hivebeam.NodeOrchestrator do
       runtime_dir = Path.join(remote_path, @native_runtime_subdir)
       pid_file = Path.join(runtime_dir, "#{name}.pid")
       log_file = Path.join(runtime_dir, "#{name}.log")
+      meta_file = Path.join(runtime_dir, "#{name}.json")
 
       runtime = %{
         name: name,
@@ -128,7 +139,8 @@ defmodule Hivebeam.NodeOrchestrator do
         compose_file: compose_file,
         remote_timeout_ms: Keyword.get(opts, :remote_timeout_ms, @default_remote_timeout_ms),
         pid_file: pid_file,
-        log_file: log_file
+        log_file: log_file,
+        meta_file: meta_file
       }
 
       {:ok, runtime}
@@ -598,6 +610,112 @@ defmodule Hivebeam.NodeOrchestrator do
     case normalize_optional_string(value) do
       nil -> cwd
       path -> path
+    end
+  end
+
+  defp hydrate_opts_from_runtime_metadata(opts, cwd, name) do
+    remote = normalize_optional_string(Keyword.get(opts, :remote))
+    remote_path = normalize_remote_path(Keyword.get(opts, :remote_path), cwd)
+
+    case load_runtime_metadata(name, remote, remote_path) do
+      {:ok, meta} ->
+        opts
+        |> put_opt_if_missing_from_meta(:provider, meta, "provider")
+        |> put_opt_if_missing_from_meta(:slot, meta, "slot")
+        |> put_opt_if_missing_from_meta(:docker, meta, "docker")
+        |> put_opt_if_missing_from_meta(:bind_ip, meta, "bind_ip")
+        |> put_opt_if_missing_from_meta(:host_ip, meta, "host_ip")
+        |> put_opt_if_missing_from_meta(:cookie, meta, "cookie")
+        |> put_opt_if_missing_from_meta(:dist_port, meta, "dist_port")
+        |> put_opt_if_missing_from_meta(:tcp_port, meta, "tcp_port")
+        |> put_opt_if_missing_from_meta(:debug_port, meta, "debug_port")
+        |> put_opt_if_missing_from_meta(:epmd_port, meta, "epmd_port")
+        |> put_opt_if_missing_from_meta(:compose_file, meta, "compose_file")
+
+      :error ->
+        opts
+    end
+  end
+
+  defp put_opt_if_missing_from_meta(opts, key, meta, meta_key) do
+    if Keyword.has_key?(opts, key) do
+      opts
+    else
+      case Map.get(meta, meta_key) do
+        nil -> opts
+        value -> Keyword.put(opts, key, value)
+      end
+    end
+  end
+
+  defp load_runtime_metadata(name, remote, remote_path) do
+    path = runtime_metadata_path(name, remote_path)
+
+    raw_result =
+      if is_nil(remote) do
+        if File.exists?(path), do: File.read(path), else: :error
+      else
+        command = "if [ -f #{shell_escape(path)} ]; then cat #{shell_escape(path)}; fi"
+
+        case System.cmd("ssh", [remote, command], stderr_to_stdout: true) do
+          {output, 0} -> {:ok, output}
+          _ -> :error
+        end
+      end
+
+    with {:ok, raw} <- raw_result,
+         trimmed when is_binary(trimmed) and trimmed != "" <- String.trim(raw),
+         {:ok, meta} <- Jason.decode(trimmed) do
+      {:ok, meta}
+    else
+      _ -> :error
+    end
+  end
+
+  defp runtime_metadata_path(name, remote_path) do
+    Path.join([remote_path, @native_runtime_subdir, "#{name}.json"])
+  end
+
+  defp persist_runtime_metadata(runtime) do
+    payload = %{
+      "provider" => runtime.provider,
+      "slot" => runtime.slot,
+      "docker" => runtime.docker,
+      "bind_ip" => runtime.bind_ip,
+      "host_ip" => runtime.host_ip,
+      "cookie" => runtime.cookie,
+      "dist_port" => runtime.dist_port,
+      "tcp_port" => runtime.tcp_port,
+      "debug_port" => runtime.debug_port,
+      "epmd_port" => runtime.epmd_port,
+      "compose_file" => runtime.compose_file
+    }
+
+    case Jason.encode(payload) do
+      {:ok, encoded} ->
+        persist_runtime_metadata_json(runtime, encoded)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp persist_runtime_metadata_json(runtime, encoded) do
+    command =
+      "mkdir -p #{shell_escape(Path.dirname(runtime.meta_file))} && printf %s #{shell_escape(encoded)} > #{shell_escape(runtime.meta_file)}"
+
+    if runtime.remote do
+      case run_remote_command(runtime, "sh -lc #{shell_escape(command)}") do
+        {:ok, _output} -> :ok
+        _ -> :error
+      end
+    else
+      with :ok <- File.mkdir_p(Path.dirname(runtime.meta_file)),
+           :ok <- File.write(runtime.meta_file, encoded) do
+        :ok
+      else
+        _ -> :error
+      end
     end
   end
 

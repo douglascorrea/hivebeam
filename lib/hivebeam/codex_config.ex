@@ -4,6 +4,7 @@ defmodule Hivebeam.CodexConfig do
   @default_acp_provider "codex"
   @default_acp_command "codex-acp"
   @default_claude_acp_command "claude-agent-acp"
+  @default_claude_acp_npx_command "npx -y @zed-industries/claude-agent-acp"
   @default_cluster_retry_ms 5_000
   @default_prompt_timeout_ms 120_000
   @default_connect_timeout_ms 30_000
@@ -50,7 +51,18 @@ defmodule Hivebeam.CodexConfig do
   end
 
   @spec default_claude_acp_command() :: String.t()
-  def default_claude_acp_command, do: @default_claude_acp_command
+  def default_claude_acp_command do
+    cond do
+      not is_nil(System.find_executable(@default_claude_acp_command)) ->
+        @default_claude_acp_command
+
+      not is_nil(System.find_executable("npx")) ->
+        @default_claude_acp_npx_command
+
+      true ->
+        @default_claude_acp_command
+    end
+  end
 
   @spec parse_acp_command(String.t() | nil) ::
           {:ok, {String.t(), [String.t()]}} | {:error, term()}
