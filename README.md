@@ -54,9 +54,9 @@ docker compose exec codex-node mix node.send --host host.docker.internal --port 
 Defaults:
 
 - node name: `codex@localhost`
-- cookie: `elx_cookie`
+- cookie: `hivebeam_cookie`
 - distribution port: `9100`
-- bind IP for exposed dist ports: `0.0.0.0` (`ELX_BIND_IP`)
+- bind IP for exposed dist ports: `0.0.0.0` (`HIVEBEAM_BIND_IP`)
 - ACP command: `/usr/local/cargo/bin/codex-acp`
 
 The Docker image installs `codex-acp` from the fork configured in `Dockerfile.codex`:
@@ -64,7 +64,7 @@ The Docker image installs `codex-acp` from the fork configured in `Dockerfile.co
 - `CODEX_ACP_GIT_REPO`
 - `CODEX_ACP_GIT_REF`
 
-For local (non-Docker) runs, if `ELX_CODEX_ACP_CMD` is not set, the bridge auto-discovers
+For local (non-Docker) runs, if `HIVEBEAM_CODEX_ACP_CMD` is not set, the bridge auto-discovers
 `codex-acp` in this order:
 
 - `../codex-acp/target/release/codex-acp` (sibling fork build)
@@ -85,7 +85,7 @@ When both nodes run on one machine, bind Docker distribution ports to your LAN I
 
 ```bash
 LAN_IP=$(ipconfig getifaddr en0)
-ELX_BIND_IP=$LAN_IP ELX_NODE_NAME=codex@$LAN_IP docker compose up -d --build
+HIVEBEAM_BIND_IP=$LAN_IP HIVEBEAM_NODE_NAME=codex@$LAN_IP docker compose up -d --build
 ```
 
 Compile once on host:
@@ -182,12 +182,12 @@ mix codex.status --node codex@10.0.0.20
 - **Bridge degraded**: check `mix codex.status` and `last_error`.
 - **No Codex auth**: ensure `~/.codex/auth.json` exists on the node running `codex-acp`.
 - **`Executable not found in PATH: codex-acp`**:
-  - local host bridge: install/build `codex-acp` in one of the auto-discovery paths above, or set `ELX_CODEX_ACP_CMD` to an absolute binary path.
+  - local host bridge: install/build `codex-acp` in one of the auto-discovery paths above, or set `HIVEBEAM_CODEX_ACP_CMD` to an absolute binary path.
   - Docker remote: ensure container node name matches your host IP:
 
 ```bash
 LAN_IP=$(ipconfig getifaddr en0)
-ELX_BIND_IP=$LAN_IP ELX_NODE_NAME=codex@$LAN_IP docker compose up -d --build
+HIVEBEAM_BIND_IP=$LAN_IP HIVEBEAM_NODE_NAME=codex@$LAN_IP docker compose up -d --build
 mix codex.live --remote-self --chat
 ```
 

@@ -134,7 +134,7 @@ defmodule Mix.Tasks.Codex.Live do
   defp ensure_distribution!([], _opts), do: :ok
 
   defp ensure_distribution!(remote_targets, opts) do
-    cookie = String.to_atom(Keyword.get(opts, :cookie, "elx_cookie"))
+    cookie = String.to_atom(Keyword.get(opts, :cookie, "hivebeam_cookie"))
 
     if Node.alive?() do
       Node.set_cookie(cookie)

@@ -7,12 +7,12 @@ services:
     user: node
     working_dir: /workspace
     environment:
-      ELX_NODE_NAME: ${ELX_NODE_NAME:-codex@localhost}
-      ELX_COOKIE: ${ELX_COOKIE:-elx_cookie}
-      ELX_CLUSTER_NODES: ${ELX_CLUSTER_NODES:-}
-      ELX_ERL_DIST_PORT: ${ELX_ERL_DIST_PORT:-9100}
-      ELX_BIND_IP: ${ELX_BIND_IP:-0.0.0.0}
-      ELX_CODEX_ACP_CMD: ${ELX_CODEX_ACP_CMD:-/usr/local/cargo/bin/codex-acp}
+      HIVEBEAM_NODE_NAME: ${HIVEBEAM_NODE_NAME:-codex@localhost}
+      HIVEBEAM_COOKIE: ${HIVEBEAM_COOKIE:-hivebeam_cookie}
+      HIVEBEAM_CLUSTER_NODES: ${HIVEBEAM_CLUSTER_NODES:-}
+      HIVEBEAM_ERL_DIST_PORT: ${HIVEBEAM_ERL_DIST_PORT:-9100}
+      HIVEBEAM_BIND_IP: ${HIVEBEAM_BIND_IP:-0.0.0.0}
+      HIVEBEAM_CODEX_ACP_CMD: ${HIVEBEAM_CODEX_ACP_CMD:-/usr/local/cargo/bin/codex-acp}
       MIX_BUILD_ROOT: /home/node/.mix_build
       MIX_DEPS_PATH: /home/node/.mix_deps
       MIX_NO_INTERACTION: "1"
@@ -22,8 +22,8 @@ services:
       - codex-mix-build:/home/node/.mix_build
       - codex-mix-deps:/home/node/.mix_deps
     ports:
-      - "${ELX_BIND_IP:-0.0.0.0}:4369:4369"
-      - "${ELX_BIND_IP:-0.0.0.0}:${ELX_ERL_DIST_PORT:-9100}:${ELX_ERL_DIST_PORT:-9100}"
+      - "${HIVEBEAM_BIND_IP:-0.0.0.0}:4369:4369"
+      - "${HIVEBEAM_BIND_IP:-0.0.0.0}:${HIVEBEAM_ERL_DIST_PORT:-9100}:${HIVEBEAM_ERL_DIST_PORT:-9100}"
       - "1455:1455"
       - "5051:5051"
     tty: true
@@ -31,7 +31,7 @@ services:
     command:
       - sh
       - -lc
-      - mix deps.get && mix compile && ERL_AFLAGS="-name ${ELX_NODE_NAME:-codex@localhost} -setcookie ${ELX_COOKIE:-elx_cookie} -kernel inet_dist_listen_min ${ELX_ERL_DIST_PORT:-9100} inet_dist_listen_max ${ELX_ERL_DIST_PORT:-9100}" mix codex.bridge.run
+      - mix deps.get && mix compile && ERL_AFLAGS="-name ${HIVEBEAM_NODE_NAME:-codex@localhost} -setcookie ${HIVEBEAM_COOKIE:-hivebeam_cookie} -kernel inet_dist_listen_min ${HIVEBEAM_ERL_DIST_PORT:-9100} inet_dist_listen_max ${HIVEBEAM_ERL_DIST_PORT:-9100}" mix codex.bridge.run
 
 volumes:
   codex-config:

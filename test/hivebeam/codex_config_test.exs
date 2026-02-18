@@ -6,12 +6,12 @@ defmodule Hivebeam.CodexConfigTest do
   test "uses defaults when env vars are missing" do
     with_env(
       [
-        {"ELX_CODEX_ACP_CMD", nil},
-        {"ELX_CLUSTER_NODES", nil},
-        {"ELX_CLUSTER_RETRY_MS", nil},
-        {"ELX_CODEX_PROMPT_TIMEOUT_MS", nil},
-        {"ELX_CODEX_CONNECT_TIMEOUT_MS", nil},
-        {"ELX_CODEX_BRIDGE_NAME", nil}
+        {"HIVEBEAM_CODEX_ACP_CMD", nil},
+        {"HIVEBEAM_CLUSTER_NODES", nil},
+        {"HIVEBEAM_CLUSTER_RETRY_MS", nil},
+        {"HIVEBEAM_CODEX_PROMPT_TIMEOUT_MS", nil},
+        {"HIVEBEAM_CODEX_CONNECT_TIMEOUT_MS", nil},
+        {"HIVEBEAM_CODEX_BRIDGE_NAME", nil}
       ],
       fn ->
         assert {:ok, {command, []}} = CodexConfig.acp_command()
@@ -28,8 +28,8 @@ defmodule Hivebeam.CodexConfigTest do
   test "parses command and cluster env vars" do
     with_env(
       [
-        {"ELX_CODEX_ACP_CMD", "docker compose exec -T codex-node codex-acp"},
-        {"ELX_CLUSTER_NODES", "codex@node-a, codex@node-b"}
+        {"HIVEBEAM_CODEX_ACP_CMD", "docker compose exec -T codex-node codex-acp"},
+        {"HIVEBEAM_CLUSTER_NODES", "codex@node-a, codex@node-b"}
       ],
       fn ->
         assert {:ok, {"docker", ["compose", "exec", "-T", "codex-node", "codex-acp"]}} =
@@ -43,9 +43,9 @@ defmodule Hivebeam.CodexConfigTest do
   test "falls back to defaults when integer envs are invalid" do
     with_env(
       [
-        {"ELX_CLUSTER_RETRY_MS", "abc"},
-        {"ELX_CODEX_PROMPT_TIMEOUT_MS", "-1"},
-        {"ELX_CODEX_CONNECT_TIMEOUT_MS", "0"}
+        {"HIVEBEAM_CLUSTER_RETRY_MS", "abc"},
+        {"HIVEBEAM_CODEX_PROMPT_TIMEOUT_MS", "-1"},
+        {"HIVEBEAM_CODEX_CONNECT_TIMEOUT_MS", "0"}
       ],
       fn ->
         assert CodexConfig.cluster_retry_ms() == 5_000
@@ -56,13 +56,13 @@ defmodule Hivebeam.CodexConfigTest do
   end
 
   test "parses custom bridge names" do
-    with_env([{"ELX_CODEX_BRIDGE_NAME", "Hivebeam.CustomBridge"}], fn ->
+    with_env([{"HIVEBEAM_CODEX_BRIDGE_NAME", "Hivebeam.CustomBridge"}], fn ->
       assert CodexConfig.bridge_name() == Hivebeam.CustomBridge
     end)
   end
 
   test "prefers sibling codex-acp build when env command is not set" do
-    with_env([{"ELX_CODEX_ACP_CMD", nil}], fn ->
+    with_env([{"HIVEBEAM_CODEX_ACP_CMD", nil}], fn ->
       with_temp_dir("acp_cfg", fn tmp_dir ->
         app_dir = Path.join(tmp_dir, "hivebeam")
         sibling_dir = Path.join(tmp_dir, "codex-acp")

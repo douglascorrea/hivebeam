@@ -9,7 +9,7 @@ defmodule Hivebeam.CodexConfig do
 
   @spec acp_command() :: {:ok, {String.t(), [String.t()]}} | {:error, term()}
   def acp_command do
-    case System.get_env("ELX_CODEX_ACP_CMD") do
+    case System.get_env("HIVEBEAM_CODEX_ACP_CMD") do
       nil ->
         parse_acp_command(default_acp_command())
 
@@ -44,7 +44,7 @@ defmodule Hivebeam.CodexConfig do
   @spec cluster_nodes() :: [node()]
   def cluster_nodes do
     ""
-    |> env("ELX_CLUSTER_NODES")
+    |> env("HIVEBEAM_CLUSTER_NODES")
     |> parse_cluster_nodes()
   end
 
@@ -60,18 +60,20 @@ defmodule Hivebeam.CodexConfig do
   end
 
   @spec cluster_retry_ms() :: pos_integer()
-  def cluster_retry_ms, do: int_env("ELX_CLUSTER_RETRY_MS", @default_cluster_retry_ms)
+  def cluster_retry_ms, do: int_env("HIVEBEAM_CLUSTER_RETRY_MS", @default_cluster_retry_ms)
 
   @spec prompt_timeout_ms() :: pos_integer()
-  def prompt_timeout_ms, do: int_env("ELX_CODEX_PROMPT_TIMEOUT_MS", @default_prompt_timeout_ms)
+  def prompt_timeout_ms,
+    do: int_env("HIVEBEAM_CODEX_PROMPT_TIMEOUT_MS", @default_prompt_timeout_ms)
 
   @spec connect_timeout_ms() :: pos_integer()
-  def connect_timeout_ms, do: int_env("ELX_CODEX_CONNECT_TIMEOUT_MS", @default_connect_timeout_ms)
+  def connect_timeout_ms,
+    do: int_env("HIVEBEAM_CODEX_CONNECT_TIMEOUT_MS", @default_connect_timeout_ms)
 
   @spec bridge_name() :: atom()
   def bridge_name do
     nil
-    |> env("ELX_CODEX_BRIDGE_NAME")
+    |> env("HIVEBEAM_CODEX_BRIDGE_NAME")
     |> parse_bridge_name()
   end
 

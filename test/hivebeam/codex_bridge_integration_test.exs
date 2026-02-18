@@ -38,7 +38,7 @@ defmodule Hivebeam.CodexBridgeIntegrationTest do
   @tag :integration
   @tag skip: not @integration_enabled
   test "remote erpc prompt works when distributed node is configured" do
-    remote_node = System.get_env("ELX_INTEGRATION_REMOTE_NODE")
+    remote_node = System.get_env("HIVEBEAM_INTEGRATION_REMOTE_NODE")
 
     if is_nil(remote_node) do
       assert true
