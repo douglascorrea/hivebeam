@@ -12,10 +12,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - os: linux
+            arch: amd64
             runner: ubuntu-latest
-          - arch: arm64
+          - os: linux
+            arch: arm64
             runner: ubuntu-24.04-arm
+          - os: darwin
+            arch: arm64
+            runner: macos-14
+          - arch: amd64
+            os: darwin
+            runner: macos-13
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -40,16 +48,41 @@ jobs:
 
       - name: Package release
         run: |
-          OS=linux
+          OS=${{ matrix.os }}
           ARCH=${{ matrix.arch }}
           OUT="hivebeam-${OS}-${ARCH}.tar.gz"
           tar -czf "$OUT" -C _build/prod/rel hivebeam
-          sha256sum "$OUT" > "$OUT.sha256"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$OUT" > "$OUT.sha256"
+          else
+            shasum -a 256 "$OUT" > "$OUT.sha256"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hivebeam-linux-${{ matrix.arch }}
+          name: hivebeam-${{ matrix.os }}-${{ matrix.arch }}
           path: |
-            hivebeam-linux-${{ matrix.arch }}.tar.gz
-            hivebeam-linux-${{ matrix.arch }}.tar.gz.sha256
+            hivebeam-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+            hivebeam-${{ matrix.os }}-${{ matrix.arch }}.tar.gz.sha256
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: hivebeam-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256

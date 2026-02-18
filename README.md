@@ -11,6 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/douglascorrea/hivebeam/master/insta
 Default install root: `~/.local/hivebeam`.
 
 The installer creates `~/.local/bin/hivebeam` and does **not** install the optional LiveView addon.
+If no prebuilt release asset exists for your platform, installer automatically falls back to source build (`git` + Elixir/Erlang required; it will try to install Elixir on common systems).
 
 ## Source workflow (contributors)
 
