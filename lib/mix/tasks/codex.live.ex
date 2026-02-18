@@ -7,6 +7,7 @@ defmodule Mix.Tasks.Codex.Live do
   @shortdoc "Realtime local/remote Codex prompts and chat with auto node setup"
 
   @switches [
+    alias: :keep,
     node: :keep,
     remote_ip: :keep,
     remote_self: :boolean,
@@ -41,6 +42,7 @@ defmodule Mix.Tasks.Codex.Live do
     validate_invalid!(invalid)
 
     approval_mode = CodexCli.parse_approval_mode!(Keyword.get(opts, :approve, "ask"))
+    target_aliases = parse_target_aliases(opts)
 
     {targets, remote_targets} = build_targets(opts)
 
@@ -56,7 +58,7 @@ defmodule Mix.Tasks.Codex.Live do
     ]
 
     if Keyword.get(opts, :chat, false) do
-      run_chat(targets, prompt_opts, Keyword.get(opts, :message))
+      run_chat(targets, prompt_opts, Keyword.get(opts, :message), target_aliases)
     else
       message = required!(opts, :message, "--message")
 
@@ -66,8 +68,8 @@ defmodule Mix.Tasks.Codex.Live do
     end
   end
 
-  defp run_chat(targets, prompt_opts, first_message) do
-    case CodexChatUi.run(targets, prompt_opts, first_message) do
+  defp run_chat(targets, prompt_opts, first_message, target_aliases) do
+    case CodexChatUi.run(targets, prompt_opts, first_message, target_aliases: target_aliases) do
       {:ok, _result} ->
         :ok
 
@@ -147,6 +149,7 @@ defmodule Mix.Tasks.Codex.Live do
       System.put_env("ERL_EPMD_ADDRESS", epmd)
       :application.set_env(:kernel, :inet_dist_listen_min, dist_port)
       :application.set_env(:kernel, :inet_dist_listen_max, dist_port)
+      :application.set_env(:kernel, :connect_all, false)
 
       node_name = String.to_atom("#{node_label}@#{host_ip}")
 
@@ -214,6 +217,47 @@ defmodule Mix.Tasks.Codex.Live do
 
   defp target_label(nil), do: if(Node.alive?(), do: to_string(Node.self()), else: "local")
   defp target_label(node), do: to_string(node)
+
+  defp parse_target_aliases(opts) do
+    values =
+      opts
+      |> Keyword.get_values(:alias)
+      |> Enum.flat_map(&split_csv/1)
+
+    {node_to_alias, alias_to_node} =
+      Enum.reduce(values, {%{}, %{}}, fn value, {node_acc, alias_acc} ->
+        case String.split(value, "=", parts: 2) do
+          [alias_name, node_name] ->
+            alias_name = String.trim(alias_name)
+            node_name = String.trim(node_name)
+
+            cond do
+              alias_name == "" or node_name == "" ->
+                Mix.raise("Invalid --alias value #{inspect(value)}. Use --alias name=node@host")
+
+              not valid_alias_name?(alias_name) ->
+                Mix.raise("Invalid alias name #{inspect(alias_name)}. Use [A-Za-z0-9_.-]")
+
+              Map.has_key?(alias_acc, alias_name) and Map.get(alias_acc, alias_name) != node_name ->
+                Mix.raise("Alias #{inspect(alias_name)} maps to multiple nodes")
+
+              true ->
+                {Map.put(node_acc, node_name, alias_name),
+                 Map.put(alias_acc, alias_name, node_name)}
+            end
+
+          _ ->
+            Mix.raise("Invalid --alias value #{inspect(value)}. Use --alias name=node@host")
+        end
+      end)
+
+    _ = alias_to_node
+    node_to_alias
+  end
+
+  defp valid_alias_name?(value) do
+    String.match?(value, ~r/^[A-Za-z0-9_.-]+$/)
+  end
 
   defp required!(opts, key, flag) do
     case Keyword.fetch(opts, key) do

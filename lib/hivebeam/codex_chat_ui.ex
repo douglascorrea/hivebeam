@@ -3,6 +3,7 @@ defmodule Hivebeam.CodexChatUi do
   use TermUI.Elm
 
   alias Hivebeam.Codex
+  alias Hivebeam.FileCompletion
   alias Hivebeam.CodexStream
   alias TermUI.Event
   alias TermUI.Renderer.Style
@@ -22,13 +23,17 @@ defmodule Hivebeam.CodexChatUi do
   @spinner_frames ["-", "\\", "|", "/"]
   @animation_interval_ms 120
 
-  @spec run([node() | nil], keyword(), String.t() | nil) :: {:ok, term()} | {:error, term()}
-  def run(targets, prompt_opts, first_message \\ nil) when is_list(targets) do
+  @target_mention_pattern ~r/^%([A-Za-z0-9_.-]+)\+([A-Za-z0-9_.-]+)(?:\s+(.*))?$/s
+
+  @spec run([node() | nil | map()], keyword(), String.t() | nil, keyword()) ::
+          {:ok, term()} | {:error, term()}
+  def run(targets, prompt_opts, first_message \\ nil, chat_opts \\ []) when is_list(targets) do
     opts = [
       root: __MODULE__,
       targets: targets,
       prompt_opts: prompt_opts,
-      first_message: first_message
+      first_message: first_message,
+      target_aliases: Keyword.get(chat_opts, :target_aliases, %{})
     ]
 
     case TermUI.Runtime.start_link(opts) do
@@ -51,13 +56,16 @@ defmodule Hivebeam.CodexChatUi do
 
   @impl true
   def init(opts) do
+    target_aliases = normalize_target_aliases(Keyword.get(opts, :target_aliases, %{}))
+
     targets =
       opts
       |> Keyword.get(:targets, [nil])
-      |> normalize_targets()
+      |> normalize_targets(target_aliases)
 
     prompt_opts = Keyword.get(opts, :prompt_opts, [])
     first_message = Keyword.get(opts, :first_message)
+    {initial_width, initial_height} = detect_initial_dimensions()
 
     state = %{
       targets: targets,
@@ -73,14 +81,13 @@ defmodule Hivebeam.CodexChatUi do
       tool_context: %{},
       stream_indices: %{},
       activity_indices: %{},
-      expanded_entries: MapSet.new(),
-      last_expandable_index: nil,
+      completion: nil,
       follow_output?: true,
       scroll_offset: 0,
       animation_phase: 0,
       animation_timer_ref: schedule_animation_tick(),
-      width: @default_width,
-      height: @default_height
+      width: initial_width,
+      height: initial_height
     }
 
     state =
@@ -89,7 +96,7 @@ defmodule Hivebeam.CodexChatUi do
       |> append_entry(
         :system,
         "chat",
-        "Commands: /targets, /use <n>, /status, /cancel, /help, /exit"
+        "Commands: /targets, /status, /cancel, /help, /exit"
       )
 
     if is_binary(first_message) and String.trim(first_message) != "" do
@@ -111,11 +118,6 @@ defmodule Hivebeam.CodexChatUi do
   end
 
   def event_to_msg(%Event.Key{key: key, modifiers: modifiers}, _state)
-      when key in ["o", "O"] and is_list(modifiers) do
-    if :ctrl in modifiers, do: {:msg, :toggle_activity_expand}, else: {:msg, {:insert, key}}
-  end
-
-  def event_to_msg(%Event.Key{key: key, modifiers: modifiers}, _state)
       when key in ["c", "C"] and is_list(modifiers) do
     if :ctrl in modifiers, do: {:msg, :quit}, else: {:msg, {:insert, key}}
   end
@@ -124,7 +126,7 @@ defmodule Hivebeam.CodexChatUi do
   def event_to_msg(%Event.Key{key: :enter}, _state), do: {:msg, :submit}
   def event_to_msg(%Event.Key{key: :backspace}, _state), do: {:msg, :backspace}
   def event_to_msg(%Event.Key{key: :delete}, _state), do: {:msg, :backspace}
-  def event_to_msg(%Event.Key{key: :tab}, _state), do: {:msg, :next_target}
+  def event_to_msg(%Event.Key{key: :tab}, _state), do: {:msg, :tab_pressed}
   def event_to_msg(%Event.Key{key: :up}, _state), do: {:msg, :scroll_up_line}
   def event_to_msg(%Event.Key{key: :down}, _state), do: {:msg, :scroll_down_line}
   def event_to_msg(%Event.Key{key: :page_up}, _state), do: {:msg, :scroll_up_page}
@@ -160,6 +162,10 @@ defmodule Hivebeam.CodexChatUi do
     {state, []}
   end
 
+  def update(:tab_pressed, state) do
+    {handle_tab_pressed(state), []}
+  end
+
   def update(:next_target, state) do
     next_index =
       case state.targets do
@@ -170,6 +176,7 @@ defmodule Hivebeam.CodexChatUi do
     {
       state
       |> Map.put(:active_index, next_index)
+      |> Map.put(:completion, nil)
       |> scroll_to_bottom(),
       []
     }
@@ -182,27 +189,8 @@ defmodule Hivebeam.CodexChatUi do
   def update(:scroll_top, state), do: {scroll_to_top(state), []}
   def update(:scroll_bottom, state), do: {scroll_to_bottom(state), []}
 
-  def update(:toggle_activity_expand, state) do
-    index = latest_expandable_index(state)
-
-    state =
-      cond do
-        is_nil(index) ->
-          state
-
-        MapSet.member?(state.expanded_entries, index) ->
-          %{state | expanded_entries: MapSet.delete(state.expanded_entries, index)}
-
-        true ->
-          %{state | expanded_entries: MapSet.put(state.expanded_entries, index)}
-      end
-      |> normalize_scroll_after_layout_change()
-
-    {state, []}
-  end
-
   def update(:backspace, state) do
-    {%{state | input: drop_last_grapheme(state.input)}, []}
+    {%{state | input: drop_last_grapheme(state.input), completion: nil}, []}
   end
 
   def update({:paste, content}, state) do
@@ -211,11 +199,11 @@ defmodule Hivebeam.CodexChatUi do
       |> String.replace("\r\n", "\n")
       |> String.replace("\r", "\n")
 
-    {%{state | input: state.input <> normalized}, []}
+    {%{state | input: state.input <> normalized, completion: nil}, []}
   end
 
   def update({:insert, chunk}, state) do
-    {%{state | input: state.input <> chunk}, []}
+    {%{state | input: state.input <> chunk, completion: nil}, []}
   end
 
   def update({:approval_decision, decision}, state) do
@@ -224,7 +212,7 @@ defmodule Hivebeam.CodexChatUi do
 
   def update(:submit, state) do
     input = String.trim(state.input)
-    state = %{state | input: ""}
+    state = %{state | input: "", completion: nil}
 
     cond do
       input == "" ->
@@ -237,7 +225,7 @@ defmodule Hivebeam.CodexChatUi do
         {append_entry(state, :system, "chat", "A prompt is already running."), []}
 
       true ->
-        {start_prompt(state, input), []}
+        handle_submit_prompt(state, input)
     end
   end
 
@@ -376,7 +364,7 @@ defmodule Hivebeam.CodexChatUi do
       "Codex Chat (term_ui) target #{state.active_index + 1}/#{length(state.targets)} #{active_label} | #{pending} | #{scroll_hint}"
 
     subheader =
-      "Tab target | Enter send | Ctrl+O expand activity | Up/Down/Page/Home/End scroll | Ctrl+C exit"
+      "Tab complete/target | Enter send | Up/Down/Page/Home/End scroll | Ctrl+C exit"
 
     body_height = body_height(state)
     body_width = body_width(state)
@@ -422,8 +410,8 @@ defmodule Hivebeam.CodexChatUi do
     )
   end
 
-  defp normalize_targets(targets) do
-    targets =
+  defp normalize_targets(targets, target_aliases) do
+    normalized =
       targets
       |> Enum.map(fn
         nil -> nil
@@ -432,7 +420,8 @@ defmodule Hivebeam.CodexChatUi do
       end)
       |> Enum.uniq()
 
-    if targets == [], do: [nil], else: targets
+    raw_targets = if normalized == [], do: [nil], else: normalized
+    build_target_descriptors(raw_targets, target_aliases)
   end
 
   defp handle_command(state, "/exit"), do: {state, [:quit]}
@@ -441,11 +430,10 @@ defmodule Hivebeam.CodexChatUi do
     {
       state
       |> append_entry(:system, "chat", "/targets: list available targets")
-      |> append_entry(:system, "chat", "/use <n>: switch active target")
+      |> append_entry(:system, "chat", "%node+agent <prompt>: route to specific target")
       |> append_entry(:system, "chat", "/status: fetch target bridge status")
       |> append_entry(:system, "chat", "/cancel: cancel running prompt")
       |> append_entry(:system, "chat", "/exit: close chat")
-      |> append_entry(:system, "chat", "Ctrl+O: expand/collapse latest activity card")
       |> append_entry(:system, "chat", "Up/Down/PageUp/PageDown/Home/End: scroll transcript"),
       []
     }
@@ -522,36 +510,11 @@ defmodule Hivebeam.CodexChatUi do
   end
 
   defp handle_command(state, command) do
-    case String.split(command, ~r/\s+/, trim: true) do
-      ["/use", raw_index] ->
-        switch_target(state, raw_index)
-
-      _ ->
-        {append_entry(state, :error, "chat", "Unknown command: #{command}"), []}
-    end
+    {append_entry(state, :error, "chat", "Unknown command: #{command}"), []}
   end
 
-  defp switch_target(state, raw_index) do
-    case Integer.parse(raw_index) do
-      {index, ""} when index > 0 and index <= length(state.targets) ->
-        next_index = index - 1
-        label = state.targets |> Enum.at(next_index) |> target_label()
-
-        {
-          state
-          |> Map.put(:active_index, next_index)
-          |> scroll_to_bottom()
-          |> append_entry(:status, label, "Switched to target #{index}."),
-          []
-        }
-
-      _ ->
-        {append_entry(state, :error, "chat", "Invalid target index: #{raw_index}"), []}
-    end
-  end
-
-  defp start_prompt(state, message) do
-    target = Enum.at(state.targets, state.active_index)
+  defp start_prompt(state, message, target_override \\ nil) do
+    target = target_override || Enum.at(state.targets, state.active_index)
     label = target_label(target)
     owner = self()
 
@@ -642,6 +605,11 @@ defmodule Hivebeam.CodexChatUi do
     end
   end
 
+  defp call_prompt(target, message, opts)
+       when is_map(target) and is_map_key(target, :raw_target) do
+    call_prompt(target.raw_target, message, opts)
+  end
+
   defp call_prompt(nil, message, opts), do: Codex.prompt(message, opts)
 
   defp call_prompt(target, message, opts) when is_map(target) do
@@ -654,6 +622,9 @@ defmodule Hivebeam.CodexChatUi do
   defp call_prompt(target, message, opts) when is_atom(target),
     do: Codex.prompt(target, message, opts)
 
+  defp call_status(target) when is_map(target) and is_map_key(target, :raw_target),
+    do: call_status(target.raw_target)
+
   defp call_status(nil), do: Codex.status(nil)
   defp call_status(target) when is_atom(target), do: Codex.status(target)
 
@@ -662,6 +633,9 @@ defmodule Hivebeam.CodexChatUi do
     bridge_name = Map.get(target, :bridge_name) || Map.get(target, "bridge_name")
     Codex.status(node, bridge_name: bridge_name)
   end
+
+  defp call_cancel(target) when is_map(target) and is_map_key(target, :raw_target),
+    do: call_cancel(target.raw_target)
 
   defp call_cancel(nil), do: Codex.cancel(nil)
   defp call_cancel(target) when is_atom(target), do: Codex.cancel(target)
@@ -972,21 +946,13 @@ defmodule Hivebeam.CodexChatUi do
     }
 
     {state, index} = append_entry_with_index(state, entry)
-
-    {
-      %{
-        state
-        | activity_indices: Map.put(state.activity_indices, node_label, index),
-          last_expandable_index: index
-      },
-      index
-    }
+    {%{state | activity_indices: Map.put(state.activity_indices, node_label, index)}, index}
   end
 
   defp update_activity_entry(state, index, updater) do
     case update_entry(state, index, updater) do
       {:ok, state} ->
-        %{state | last_expandable_index: index}
+        state
 
       :error ->
         state
@@ -1027,7 +993,8 @@ defmodule Hivebeam.CodexChatUi do
     |> Enum.with_index()
     |> Enum.reduce(state, fn {target, index}, acc ->
       marker = if index == acc.active_index, do: "*", else: " "
-      line = "#{marker} #{index + 1}. #{target_label(target)}"
+      mention = target_mention(target)
+      line = "#{marker} #{index + 1}. #{target_label(target)} => #{mention}"
       append_entry(acc, :system, "chat", line)
     end)
   end
@@ -1041,9 +1008,9 @@ defmodule Hivebeam.CodexChatUi do
     end)
   end
 
-  defp entry_to_lines(%{role: :activity} = entry, index, width, state) do
+  defp entry_to_lines(%{role: :activity} = entry, _index, width, state) do
     entry
-    |> activity_lines(MapSet.member?(state.expanded_entries, index), state)
+    |> activity_lines(false, state)
     |> Enum.with_index()
     |> Enum.flat_map(fn {{line, kind}, line_index} ->
       line
@@ -1078,9 +1045,8 @@ defmodule Hivebeam.CodexChatUi do
   end
 
   defp activity_lines(entry, expanded?, state) do
-    hint = if expanded?, do: "Ctrl+O to collapse", else: "Ctrl+O to expand"
     spinner = if entry.running, do: spinner_frame(state.animation_phase), else: "*"
-    summary = activity_summary(entry, hint)
+    summary = activity_summary(entry)
 
     header = "[#{entry.node} activity] #{spinner} #{summary}"
 
@@ -1151,21 +1117,21 @@ defmodule Hivebeam.CodexChatUi do
     end
   end
 
-  defp activity_summary(entry, hint) do
+  defp activity_summary(entry) do
     tool_count = if is_map(entry.tool_rows), do: map_size(entry.tool_rows), else: 0
 
     cond do
       entry.running and tool_count > 0 ->
-        "#{entry.latest_activity || "Working"} (#{tool_count} tool#{plural(tool_count)} running, #{hint})"
+        "#{entry.latest_activity || "Working"} (#{tool_count} tool#{plural(tool_count)} running)"
 
       entry.running ->
-        "Thinking... (#{hint})"
+        "Thinking..."
 
       tool_count > 0 ->
-        "Used #{tool_count} tool#{plural(tool_count)} (#{hint})"
+        "Used #{tool_count} tool#{plural(tool_count)}"
 
       true ->
-        "Completed (#{hint})"
+        "Completed"
     end
   end
 
@@ -1273,7 +1239,7 @@ defmodule Hivebeam.CodexChatUi do
     |> String.replace("\r", "\n")
   end
 
-  defp body_height(state), do: max(state.height - 6, 6)
+  defp body_height(state), do: max(state.height - 5, 3)
   defp body_width(state), do: max(state.width - 2, 20)
 
   defp rendered_line_count(entries, width, state) do
@@ -1319,15 +1285,6 @@ defmodule Hivebeam.CodexChatUi do
     max(div(body_height(state), 2), @scroll_step)
   end
 
-  defp latest_expandable_index(state) do
-    running_index =
-      state.activity_indices
-      |> Map.values()
-      |> Enum.max(fn -> nil end)
-
-    running_index || state.last_expandable_index
-  end
-
   defp schedule_animation_tick do
     Process.send_after(self(), :chat_animation_tick, @animation_interval_ms)
   end
@@ -1353,6 +1310,8 @@ defmodule Hivebeam.CodexChatUi do
   defp entry_style(:status), do: Style.new(fg: :cyan)
   defp entry_style(:system), do: Style.new(fg: :bright_black)
   defp entry_style(:error), do: Style.new(fg: {255, 192, 192}, bg: {66, 20, 20}, attrs: [:bold])
+
+  defp target_label(%{display_label: label}) when is_binary(label), do: label
 
   defp target_label(target) when is_map(target) do
     node = Map.get(target, :node) || Map.get(target, "node")
@@ -1395,6 +1354,328 @@ defmodule Hivebeam.CodexChatUi do
       |> List.last()
       |> String.replace_suffix("Bridge", "")
       |> Macro.underscore()
+    end
+  end
+
+  defp bridge_provider_alias(nil), do: "codex"
+
+  defp bridge_provider_alias(bridge_name) do
+    normalized = to_string(bridge_name)
+
+    if normalized in ["Elixir.Hivebeam.CodexBridge", "Hivebeam.CodexBridge"] do
+      "codex"
+    else
+      normalized
+      |> String.split(".")
+      |> List.last()
+      |> String.replace_suffix("Bridge", "")
+      |> Macro.underscore()
+    end
+  end
+
+  defp detect_initial_dimensions do
+    case {:io.columns(), :io.rows()} do
+      {{:ok, columns}, {:ok, rows}} when is_integer(columns) and is_integer(rows) ->
+        {max(40, columns), max(10, rows)}
+
+      _ ->
+        {@default_width, @default_height}
+    end
+  end
+
+  defp normalize_target_aliases(aliases) when is_map(aliases) do
+    aliases
+    |> Enum.reduce(%{}, fn {node_name, alias_name}, acc ->
+      node_key = to_string(node_name)
+      alias_value = to_string(alias_name)
+
+      if valid_alias_name?(alias_value) and String.trim(node_key) != "" do
+        Map.put(acc, String.trim(node_key), alias_value)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp normalize_target_aliases(_), do: %{}
+
+  defp build_target_descriptors(raw_targets, target_aliases) do
+    descriptors =
+      raw_targets
+      |> Enum.map(fn raw_target ->
+        node = raw_target_node(raw_target)
+        bridge_name = raw_target_bridge_name(raw_target)
+
+        %{
+          raw_target: raw_target,
+          node: node,
+          bridge_name: bridge_name,
+          node_key: raw_target_node_key(node),
+          provider_alias: bridge_provider_alias(bridge_name),
+          display_label: target_label(raw_target)
+        }
+      end)
+
+    node_aliases =
+      descriptors
+      |> Enum.map(& &1.node_key)
+      |> Enum.uniq()
+      |> Enum.with_index(1)
+      |> Enum.reduce(%{}, fn {node_key, index}, acc ->
+        resolved =
+          case Map.get(target_aliases, node_key) do
+            alias_name when is_binary(alias_name) and alias_name != "" ->
+              if valid_alias_name?(alias_name), do: alias_name, else: "node#{index}"
+
+            _ ->
+              "node#{index}"
+          end
+
+        Map.put(acc, node_key, resolved)
+      end)
+
+    Enum.map(descriptors, fn descriptor ->
+      Map.put(descriptor, :node_alias, Map.fetch!(node_aliases, descriptor.node_key))
+    end)
+  end
+
+  defp raw_target_node(nil), do: nil
+  defp raw_target_node(target) when is_atom(target), do: target
+
+  defp raw_target_node(target) when is_map(target) do
+    Map.get(target, :node) || Map.get(target, "node")
+  end
+
+  defp raw_target_bridge_name(target) when is_map(target) do
+    Map.get(target, :bridge_name) || Map.get(target, "bridge_name")
+  end
+
+  defp raw_target_bridge_name(_), do: nil
+
+  defp raw_target_node_key(nil) do
+    if Node.alive?(), do: to_string(Node.self()), else: "local"
+  end
+
+  defp raw_target_node_key(node) when is_atom(node), do: to_string(node)
+  defp raw_target_node_key(node) when is_binary(node), do: node
+  defp raw_target_node_key(other), do: inspect(other)
+
+  defp valid_alias_name?(value) when is_binary(value) do
+    String.match?(value, ~r/^[A-Za-z0-9_.-]+$/)
+  end
+
+  defp target_mention(%{node_alias: node_alias, provider_alias: provider_alias})
+       when is_binary(node_alias) and is_binary(provider_alias) do
+    "%#{node_alias}+#{provider_alias}"
+  end
+
+  defp target_mention(_target), do: ""
+
+  defp handle_submit_prompt(state, input) do
+    case parse_target_routing(input) do
+      {:ok, nil, message} ->
+        {start_prompt(state, message), []}
+
+      {:ok, {node_alias, provider_alias}, message} ->
+        case resolve_routed_target(state.targets, node_alias, provider_alias) do
+          {:ok, target, index} ->
+            state =
+              state
+              |> Map.put(:active_index, index)
+              |> start_prompt(message, target)
+
+            {state, []}
+
+          {:error, reason} ->
+            {append_entry(state, :error, "chat", reason), []}
+        end
+
+      {:error, reason} ->
+        {append_entry(state, :error, "chat", reason), []}
+    end
+  end
+
+  defp parse_target_routing(input) do
+    if String.starts_with?(input, "%") do
+      case Regex.run(@target_mention_pattern, input, capture: :all_but_first) do
+        [node_alias, provider_alias, message] ->
+          with {:ok, normalized_message} <- normalize_routed_message(message) do
+            {:ok, {node_alias, provider_alias}, normalized_message}
+          end
+
+        [node_alias, provider_alias] ->
+          {:error, "Missing prompt text after %#{node_alias}+#{provider_alias}"}
+
+        _ ->
+          {:error, "Invalid target mention. Use %node+agent <prompt>."}
+      end
+    else
+      {:ok, nil, input}
+    end
+  end
+
+  defp normalize_routed_message(message) when is_binary(message) do
+    trimmed = String.trim(message)
+
+    if trimmed == "",
+      do: {:error, "Missing prompt text after target mention."},
+      else: {:ok, trimmed}
+  end
+
+  defp normalize_routed_message(_), do: {:error, "Missing prompt text after target mention."}
+
+  defp resolve_routed_target(targets, node_alias, provider_alias) do
+    matches =
+      targets
+      |> Enum.with_index()
+      |> Enum.filter(fn {target, _index} ->
+        target.node_alias == node_alias and target.provider_alias == provider_alias
+      end)
+
+    case matches do
+      [{target, index}] ->
+        {:ok, target, index}
+
+      [] ->
+        {:error,
+         "Unknown target %#{node_alias}+#{provider_alias}. Use /targets to list valid mentions."}
+
+      _ ->
+        {:error,
+         "Ambiguous target %#{node_alias}+#{provider_alias}. Use /targets to resolve aliases."}
+    end
+  end
+
+  defp handle_tab_pressed(state) do
+    case completion_context(state.input) do
+      nil ->
+        cycle_target(state)
+
+      context ->
+        apply_next_completion(state, context)
+    end
+  end
+
+  defp cycle_target(state) do
+    next_index =
+      case state.targets do
+        [_single] -> state.active_index
+        targets -> rem(state.active_index + 1, length(targets))
+      end
+
+    state
+    |> Map.put(:active_index, next_index)
+    |> Map.put(:completion, nil)
+    |> scroll_to_bottom()
+  end
+
+  defp apply_next_completion(state, context) do
+    target_key = completion_target_key(context.kind, state)
+
+    completion =
+      if reuse_completion?(state.completion, context, target_key) do
+        previous = state.completion
+        index = rem(previous.index + 1, length(previous.candidates))
+        %{previous | index: index}
+      else
+        candidates = completion_candidates(state, context)
+
+        case candidates do
+          [] ->
+            nil
+
+          _ ->
+            %{
+              kind: context.kind,
+              head: context.head,
+              candidates: candidates,
+              index: 0,
+              target_key: target_key
+            }
+        end
+      end
+
+    if is_nil(completion) do
+      state
+    else
+      replacement = Enum.at(completion.candidates, completion.index)
+      %{state | completion: completion, input: completion.head <> replacement}
+    end
+  end
+
+  defp completion_context(input) do
+    token = last_token(input)
+
+    cond do
+      is_nil(token) ->
+        nil
+
+      String.starts_with?(token, "%") ->
+        %{kind: :mention, head: token_head(input, token), token: token}
+
+      String.starts_with?(token, "@") ->
+        %{
+          kind: :file,
+          head: token_head(input, token),
+          token: token,
+          query: String.trim_leading(token, "@")
+        }
+
+      true ->
+        nil
+    end
+  end
+
+  defp completion_candidates(state, %{kind: :mention, token: token}) do
+    state.targets
+    |> Enum.map(&target_mention/1)
+    |> Enum.uniq()
+    |> Enum.filter(&String.starts_with?(&1, token))
+    |> Enum.sort()
+  end
+
+  defp completion_candidates(state, %{kind: :file, token: token, query: query}) do
+    active_target = Enum.at(state.targets, state.active_index)
+    node = active_target |> Map.get(:node)
+
+    node
+    |> FileCompletion.complete(query)
+    |> Enum.map(&("@" <> &1))
+    |> Enum.filter(&String.starts_with?(&1, token))
+    |> Enum.sort()
+  end
+
+  defp completion_candidates(_state, _context), do: []
+
+  defp completion_target_key(:mention, _state), do: :mention
+
+  defp completion_target_key(:file, state) do
+    target = Enum.at(state.targets, state.active_index)
+    {target.node_alias, target.provider_alias}
+  end
+
+  defp reuse_completion?(nil, _context, _target_key), do: false
+
+  defp reuse_completion?(completion, context, target_key) do
+    completion.kind == context.kind and
+      completion.head == context.head and
+      completion.target_key == target_key and
+      completion.candidates != [] and
+      context.token == Enum.at(completion.candidates, completion.index)
+  end
+
+  defp token_head(input, token) do
+    String.slice(input, 0, String.length(input) - String.length(token))
+  end
+
+  defp last_token(input) do
+    case String.split(input, ~r/\s+/, trim: false) do
+      [] ->
+        nil
+
+      parts ->
+        token = List.last(parts)
+        if token == "", do: nil, else: token
     end
   end
 

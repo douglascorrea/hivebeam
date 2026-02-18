@@ -1,289 +1,170 @@
 # Hivebeam
 
-This project contains two communication paths:
+Simple runbook for local and remote nodes.
 
-- **TCP demo path**: simple host/container message exchange (`mix node.listen`, `mix node.send`)
-- **Distributed ACP path**: long-lived Codex bridge using ACPex + distributed Erlang
+## Important: execution mode
 
-## TCP demo
+- Default (`mix node.up ...`): runs **outside Docker** (native process on the machine).
+- Docker mode: add `--docker`.
 
-1. Build and start container:
-
-```bash
-docker compose up -d --build
-```
-
-2. Start a local listener:
+Examples:
 
 ```bash
-mix node.listen --name local --port 5050
+# Native (default)
+mix node.up --name box1 --provider codex
+
+# Docker
+mix node.up --docker --name box1 --provider codex
 ```
 
-3. Start container listener:
+## Requirements
+
+- Elixir
+- This repo checked out
+- Docker only if you use `--docker`
+
+First time:
 
 ```bash
-docker compose exec codex-node mix node.listen --name docker --port 5051
+mix deps.get
+mix compile
 ```
 
-4. Send host -> container:
+## 1) Local machine
+
+### 1.1 Start nodes (native, no Docker)
 
 ```bash
-mix node.send --host 127.0.0.1 --port 5051 --from local --message "hello from host"
+mix node.up --name box1 --provider codex
+mix node.up --name box2 --provider claude
 ```
 
-5. Send container -> host:
+### 1.2 Start nodes (Docker)
+
+On macOS, add loopback aliases first (once per IP you use):
 
 ```bash
-docker compose exec codex-node mix node.send --host host.docker.internal --port 5050 --from docker --message "hello from docker"
+sudo ifconfig lo0 alias 127.0.0.11 up
+sudo ifconfig lo0 alias 127.0.0.12 up
 ```
 
-## Distributed ACP bridge
+For more local Docker nodes, keep adding `127.0.0.13`, `127.0.0.14`, etc.
 
-### What it does
+```bash
+mix node.up --docker --name box1 --provider codex
+mix node.up --docker --name box2 --provider claude
+```
 
-- Each node runs a local ACP subprocess over stdio (`codex-acp` or `claude-agent-acp`).
-- `Hivebeam.CodexBridge` keeps one long-lived ACP session.
-- Cross-node prompt calls use `:erpc`.
-- Prompt calls can stream thought/message/tool updates in real time.
-- Agent tool operations (`fs/*`, `terminal/*`) are enabled and can request approval.
+### 1.3 Check nodes
 
-### Docker node startup (auto)
+```bash
+mix node.ls --name box1
+mix node.ls --name box2
+```
 
-`docker-compose.yml` auto-starts `mix agents.bridge.run` (Codex + Claude when available).
+### 1.4 Connect to local nodes
+
+```bash
+mix agents.live \
+  --node codex@127.0.0.11 \
+  --node claude@127.0.0.12 \
+  --alias box1=codex@127.0.0.11 \
+  --alias box2=claude@127.0.0.12 \
+  --chat
+```
+
+In chat:
+
+```text
+%box1+codex check @mix.exs
+%box2+claude review @lib/hivebeam/codex_chat_ui.ex
+```
+
+## 2) Remote Linux/macOS machines
+
+### 2.1 One-time setup on remote
+
+```bash
+ssh user@remote-host
+git clone <your-repo-url> /srv/hivebeam
+cd /srv/hivebeam
+```
+
+### 2.2 Start remote nodes (native, default)
+
+```bash
+mix node.up --name edge1 --provider codex --remote user@remote-host --remote-path /srv/hivebeam
+mix node.up --name edge2 --provider claude --remote user@remote-host --remote-path /srv/hivebeam
+```
+
+### 2.3 Start remote nodes with Docker
+
+```bash
+mix node.up --docker --name edge1 --provider codex --remote user@remote-host --remote-path /srv/hivebeam
+mix node.up --docker --name edge2 --provider claude --remote user@remote-host --remote-path /srv/hivebeam
+```
+
+### 2.4 Check remote nodes
+
+```bash
+mix node.ls --name edge1 --remote user@remote-host --remote-path /srv/hivebeam
+mix node.ls --name edge2 --remote user@remote-host --remote-path /srv/hivebeam
+```
+
+### 2.5 Connect to remote nodes
+
+```bash
+mix agents.live \
+  --node codex@remote-host \
+  --node claude@remote-host \
+  --alias edge1=codex@remote-host \
+  --alias edge2=claude@remote-host \
+  --chat
+```
+
+## 3) Stop nodes
+
+### Local
+
+```bash
+mix node.down --name box1
+mix node.down --name box2
+```
+
+Docker local:
+
+```bash
+mix node.down --docker --name box1
+mix node.down --docker --name box2
+```
+
+### Remote
+
+```bash
+mix node.down --name edge1 --remote user@remote-host --remote-path /srv/hivebeam
+mix node.down --name edge2 --remote user@remote-host --remote-path /srv/hivebeam
+```
+
+Docker remote:
+
+```bash
+mix node.down --docker --name edge1 --remote user@remote-host --remote-path /srv/hivebeam
+mix node.down --docker --name edge2 --remote user@remote-host --remote-path /srv/hivebeam
+```
+
+## 4) Docker build args (only for --docker mode)
+
+You do not need to set these unless you want a custom `codex-acp` source/revision.
 
 Defaults:
 
-- node name: `codex@localhost`
-- cookie: `hivebeam_cookie`
-- distribution port: `9100`
-- bind IP for exposed dist ports: `0.0.0.0` (`HIVEBEAM_BIND_IP`)
-- ACP provider: `codex` (`HIVEBEAM_ACP_PROVIDER`)
-- Codex ACP command: `/usr/local/cargo/bin/codex-acp` (`HIVEBEAM_CODEX_ACP_CMD`)
-- Claude ACP command: `claude-agent-acp` (`HIVEBEAM_CLAUDE_AGENT_ACP_CMD`)
+- `CODEX_ACP_GIT_REPO=https://github.com/douglascorrea/codex-acp.git`
+- `CODEX_ACP_GIT_REF=5d8c939`
 
-The Docker image installs `codex-acp` from the fork configured in `Dockerfile.codex`:
-
-- `CODEX_ACP_GIT_REPO`
-- `CODEX_ACP_GIT_REF`
-
-For local (non-Docker) runs, if `HIVEBEAM_CODEX_ACP_CMD` is not set, the bridge auto-discovers
-`codex-acp` in this order:
-
-- `../codex-acp/target/release/codex-acp` (sibling fork build)
-- `../codex-acp/target/debug/codex-acp`
-- `~/.cargo/bin/codex-acp`
-- `/usr/local/cargo/bin/codex-acp`
-- `codex-acp` from `PATH`
-
-Provider summary:
-
-| Provider (`HIVEBEAM_ACP_PROVIDER`) | Default command                | Override env                    |
-|------------------------------------|--------------------------------|---------------------------------|
-| `codex`                            | autodiscovered `codex-acp`     | `HIVEBEAM_CODEX_ACP_CMD`        |
-| `claude`                           | `claude-agent-acp` from `PATH` | `HIVEBEAM_CLAUDE_AGENT_ACP_CMD` |
-
-Bring it up:
+Override example:
 
 ```bash
-docker compose up -d --build
+CODEX_ACP_GIT_REPO=https://github.com/your-org/codex-acp.git \
+CODEX_ACP_GIT_REF=main \
+mix node.up --docker --name box1 --provider codex
 ```
-
-### Claude Code nodes (login auth, no API key)
-
-`claude-agent-acp` uses Claude Code authentication. Run login once on the remote node, then start the bridge with the Claude provider.
-
-Authenticate inside the running Docker node (persists in `/home/node/.claude`, `/home/node/.claude.json`, and `/home/node/.config/claude-code`):
-
-```bash
-docker compose up -d --build
-docker compose exec -it codex-node claude
-# inside Claude REPL:
-# /login
-```
-
-Start a remote Claude bridge node:
-
-```bash
-LAN_IP=$(ipconfig getifaddr en0)
-HIVEBEAM_ACP_PROVIDER=claude HIVEBEAM_NODE_NAME=claude@$LAN_IP HIVEBEAM_BIND_IP=$LAN_IP docker compose up -d --build
-```
-
-Connect from host:
-
-```bash
-mix codex.live --remote-name claude --remote-self --chat
-```
-
-Same flow with the Claude wrapper task:
-
-```bash
-mix claude.live --remote-self --chat
-```
-
-Or start a local Claude bridge directly:
-
-```bash
-mix claude.bridge.run
-```
-
-### One-command dual-provider mode (Codex + Claude)
-
-Start all available providers on a remote node:
-
-```bash
-mix agents.bridge.run
-```
-
-`agents.bridge.run` keeps Codex as default and auto-starts Claude when `claude-agent-acp` is installed and callable.
-
-From host, connect to all available providers on local/remotes:
-
-```bash
-mix agents.live --remote-self --chat
-```
-
-Multiple remotes:
-
-```bash
-mix agents.live --node codex@10.0.0.20 --node codex@10.0.0.30 --chat
-```
-
-Optional provider filter:
-
-```bash
-mix agents.live --providers codex --remote-self --chat
-```
-
-### Host + Docker on same machine
-
-When both nodes run on one machine, bind Docker distribution ports to your LAN IP to avoid local `epmd` conflicts.
-
-```bash
-LAN_IP=$(ipconfig getifaddr en0)
-HIVEBEAM_BIND_IP=$LAN_IP HIVEBEAM_NODE_NAME=codex@$LAN_IP docker compose up -d --build
-```
-
-Compile once on host:
-
-```bash
-mix deps.get && mix compile
-```
-
-### Realtime prompt/chat task (recommended)
-
-Use `mix codex.live` so you do not need manual `ERL_AFLAGS` / `ERL_EPMD_ADDRESS` exports.
-
-Local one-shot prompt:
-
-```bash
-mix codex.live --message "Reply with exactly HELLO"
-```
-
-Remote one-shot prompt (same machine host -> container, no env vars):
-
-```bash
-mix codex.live --remote-self --message "What was hardest to find?"
-```
-
-Realtime chat with one remote:
-
-```bash
-mix codex.live --remote-self --chat
-```
-
-`--chat` now uses a full-screen `term_ui` interface with live streaming output.
-Tool/reasoning updates are grouped into low-noise activity cards with inferred labels like `Exploring`, `Writing`, `Verifying`, and `Executing`.
-Press `Ctrl+O` to expand/collapse the latest activity card.
-
-Controls:
-
-- `Enter`: send message
-- `Tab`: switch active target
-- `Ctrl+O`: expand/collapse latest activity details
-- `Up` / `Down`: scroll transcript by line
-- `Page Up` / `Page Down`: scroll transcript by page
-- `Home` / `End`: jump to oldest/newest visible history
-- `Ctrl+C`: exit chat
-- `/targets`: list targets
-- `/use <n>`: switch target by index
-- `/status`: fetch bridge status for active target
-- `/cancel`: request cancellation for the running prompt
-- `/help`: show commands
-- `/exit`: close chat
-
-If `/targets` shows `host@...`, you are talking to the local bridge. For Docker remote chat you should see `codex@<ip>`.
-
-For Claude remotes, use `--remote-name claude` (or explicit `--node claude@<ip>`) so target discovery matches the Claude node name.
-
-Broadcast one prompt to local + multiple remotes:
-
-```bash
-mix codex.live --local --node codex@10.0.0.20 --node codex@10.0.0.30 --message "Status check"
-```
-
-Approval policy:
-
-```bash
-mix codex.live --remote-self --chat --approve ask
-```
-
-`--approve` supports: `ask` (default), `allow`, `deny`.
-
-### Legacy prompt/status tasks
-
-`mix codex.prompt` now also streams thought/tool updates and supports approvals.
-
-Local prompt:
-
-```bash
-mix codex.prompt --message "Reply with exactly HELLO"
-```
-
-Remote prompt:
-
-```bash
-mix codex.prompt --node codex@10.0.0.20 --message "Reply with exactly REMOTE_HELLO"
-```
-
-Status:
-
-```bash
-mix codex.status
-mix codex.status --node codex@10.0.0.20
-```
-
-### Troubleshooting
-
-- **Cookie mismatch**: ensure all nodes use same cookie.
-- **Node unreachable**: verify `4369` and distribution ports are open/mapped.
-- **Bridge degraded**: check `mix codex.status` and `last_error`.
-- **No Codex auth**: ensure `~/.codex/auth.json` exists on the node running `codex-acp`.
-- **Claude login required**:
-  - run `claude /login` on the same node/container where `claude-agent-acp` runs.
-  - if prompt fails with `Please run /login`, the Claude session is missing or expired.
-  - avoid `docker compose run --rm ...` for login state; use `docker compose exec ...` on the running service so auth files are written to the persisted service volumes.
-- **`Executable not found in PATH: claude-agent-acp`**:
-  - install `@zed-industries/claude-agent-acp` or set `HIVEBEAM_CLAUDE_AGENT_ACP_CMD` to an absolute path.
-- **`Executable not found in PATH: codex-acp`**:
-  - local host bridge: install/build `codex-acp` in one of the auto-discovery paths above, or set `HIVEBEAM_CODEX_ACP_CMD` to an absolute binary path.
-  - Docker remote: ensure container node name matches your host IP:
-
-```bash
-LAN_IP=$(ipconfig getifaddr en0)
-HIVEBEAM_BIND_IP=$LAN_IP HIVEBEAM_NODE_NAME=codex@$LAN_IP docker compose up -d --build
-mix codex.live --remote-self --chat
-```
-
-## Mix tasks
-
-- `mix agents.bridge.run`
-- `mix agents.live --chat`
-- `mix codex.bridge.run`
-- `mix claude.bridge.run`
-- `mix claude.live --chat`
-- `mix codex.live --message "..."`
-- `mix codex.live --chat`
-- `mix codex.prompt --message "..."`
-- `mix codex.prompt --node <node@host> --message "..."`
-- `mix codex.status`
-- `mix codex.status --node <node@host>`

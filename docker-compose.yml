@@ -3,11 +3,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.codex
-    container_name: codex-node
+      args:
+        CODEX_ACP_GIT_REPO: ${CODEX_ACP_GIT_REPO:-https://github.com/douglascorrea/codex-acp.git}
+        CODEX_ACP_GIT_REF: ${CODEX_ACP_GIT_REF:-5d8c939}
     user: node
     working_dir: /workspace
     environment:
       HIVEBEAM_ACP_PROVIDER: ${HIVEBEAM_ACP_PROVIDER:-codex}
+      HIVEBEAM_CODEX_BRIDGE_NAME: ${HIVEBEAM_CODEX_BRIDGE_NAME:-Hivebeam.CodexBridge}
       HIVEBEAM_NODE_NAME: ${HIVEBEAM_NODE_NAME:-codex@localhost}
       HIVEBEAM_COOKIE: ${HIVEBEAM_COOKIE:-hivebeam_cookie}
       HIVEBEAM_CLUSTER_NODES: ${HIVEBEAM_CLUSTER_NODES:-}
@@ -26,16 +29,16 @@ services:
       - codex-mix-build:/home/node/.mix_build
       - codex-mix-deps:/home/node/.mix_deps
     ports:
-      - "${HIVEBEAM_BIND_IP:-0.0.0.0}:4369:4369"
+      - "${HIVEBEAM_BIND_IP:-0.0.0.0}:${HIVEBEAM_EPMD_HOST_PORT:-4369}:4369"
       - "${HIVEBEAM_BIND_IP:-0.0.0.0}:${HIVEBEAM_ERL_DIST_PORT:-9100}:${HIVEBEAM_ERL_DIST_PORT:-9100}"
-      - "1455:1455"
-      - "5051:5051"
+      - "${HIVEBEAM_BIND_IP:-0.0.0.0}:${HIVEBEAM_DEBUG_HOST_PORT:-1455}:1455"
+      - "${HIVEBEAM_BIND_IP:-0.0.0.0}:${HIVEBEAM_TCP_HOST_PORT:-5051}:5051"
     tty: true
     stdin_open: true
     command:
       - sh
       - -lc
-      - mkdir -p /home/node/.claude /home/node/.config/claude-code && ln -sfn /home/node/.claude/claude-global-state.json /home/node/.claude.json && mix deps.get && mix compile && ERL_AFLAGS="-name ${HIVEBEAM_NODE_NAME:-codex@localhost} -setcookie ${HIVEBEAM_COOKIE:-hivebeam_cookie} -kernel inet_dist_listen_min ${HIVEBEAM_ERL_DIST_PORT:-9100} inet_dist_listen_max ${HIVEBEAM_ERL_DIST_PORT:-9100}" mix agents.bridge.run
+      - mkdir -p /home/node/.claude /home/node/.config/claude-code && ln -sfn /home/node/.claude/claude-global-state.json /home/node/.claude.json && mix deps.get && mix compile && ERL_AFLAGS="-name ${HIVEBEAM_NODE_NAME:-codex@localhost} -setcookie ${HIVEBEAM_COOKIE:-hivebeam_cookie} -kernel inet_dist_listen_min ${HIVEBEAM_ERL_DIST_PORT:-9100} inet_dist_listen_max ${HIVEBEAM_ERL_DIST_PORT:-9100} -connect_all false" mix ${HIVEBEAM_ACP_PROVIDER:-codex}.bridge.run
 
 volumes:
   codex-config:
