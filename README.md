@@ -103,12 +103,17 @@ mix codex.live --remote-self --chat
 ```
 
 `--chat` now uses a full-screen `term_ui` interface with live streaming output.
-Tool events are shown with inferred activity labels like `Exploring`, `Writing`, `Verifying`, and `Executing`.
+Tool/reasoning updates are grouped into low-noise activity cards with inferred labels like `Exploring`, `Writing`, `Verifying`, and `Executing`.
+Press `Ctrl+O` to expand/collapse the latest activity card.
 
 Controls:
 
 - `Enter`: send message
 - `Tab`: switch active target
+- `Ctrl+O`: expand/collapse latest activity details
+- `Up` / `Down`: scroll transcript by line
+- `Page Up` / `Page Down`: scroll transcript by page
+- `Home` / `End`: jump to oldest/newest visible history
 - `Ctrl+C`: exit chat
 - `/targets`: list targets
 - `/use <n>`: switch target by index

@@ -36,13 +36,14 @@ defmodule ElxDockerNode.CodexChatUiTest do
 
     last_entries = Enum.take(state.entries, -3)
 
-    assert Enum.map(last_entries, & &1.role) == [:assistant, :tool, :assistant]
+    assert Enum.map(last_entries, & &1.role) == [:assistant, :activity, :assistant]
     assert Enum.at(last_entries, 0).text == "first"
-    assert String.contains?(Enum.at(last_entries, 1).text, "Read mix.exs")
+    assert Enum.at(last_entries, 1).latest_activity == "Exploring"
+    assert map_size(Enum.at(last_entries, 1).tool_rows) == 1
     assert Enum.at(last_entries, 2).text == "second"
   end
 
-  test "shows thinking status when prompt stream starts" do
+  test "shows thinking activity card when prompt stream starts" do
     state =
       CodexChatUi.init(
         targets: [:"codex@192.168.50.234"],
@@ -57,13 +58,18 @@ defmodule ElxDockerNode.CodexChatUiTest do
       )
 
     assert List.last(state.entries) == %{
-             role: :status,
+             role: :activity,
              node: "codex@192.168.50.234",
-             text: "Thinking..."
+             running: true,
+             latest_activity: "Thinking",
+             latest_summary: nil,
+             thought_text: "",
+             tool_rows: %{},
+             tool_order: []
            }
   end
 
-  test "does not duplicate identical thinking status lines" do
+  test "does not duplicate thinking activity cards for repeated start events" do
     state =
       CodexChatUi.init(
         targets: [:"codex@192.168.50.234"],
@@ -73,13 +79,78 @@ defmodule ElxDockerNode.CodexChatUiTest do
     {:ok, state} = push_stream_event(state, :start, nil)
     {:ok, state} = push_stream_event(state, :start, nil)
 
-    thinking_lines =
+    activity_entries =
       Enum.filter(state.entries, fn
-        %{role: :status, node: "codex@192.168.50.234", text: "Thinking..."} -> true
+        %{role: :activity, node: "codex@192.168.50.234"} -> true
         _ -> false
       end)
 
-    assert length(thinking_lines) == 1
+    assert length(activity_entries) == 1
+  end
+
+  test "preserves scroll position while new output streams when user is scrolled up" do
+    state =
+      CodexChatUi.init(
+        targets: [:"codex@192.168.50.234"],
+        prompt_opts: [show_thoughts: true, show_tools: true]
+      )
+
+    large_chunk =
+      1..40
+      |> Enum.map_join("\n", fn n -> "line-#{n}" end)
+
+    {:ok, state} =
+      push_stream_update(
+        state,
+        %{"type" => "agent_message_chunk", "content" => %{"text" => large_chunk}}
+      )
+
+    {state, []} = CodexChatUi.update(:scroll_up_page, state)
+    assert state.scroll_offset > 0
+    assert state.follow_output? == false
+
+    old_offset = state.scroll_offset
+
+    {:ok, state} =
+      push_stream_update(
+        state,
+        %{"type" => "agent_message_chunk", "content" => %{"text" => "\nnew-tail-line"}}
+      )
+
+    assert state.scroll_offset > old_offset
+    assert state.follow_output? == false
+
+    {state, []} = CodexChatUi.update(:scroll_bottom, state)
+    assert state.scroll_offset == 0
+    assert state.follow_output? == true
+  end
+
+  test "toggles latest activity expansion with ctrl+o message" do
+    state =
+      CodexChatUi.init(
+        targets: [:"codex@192.168.50.234"],
+        prompt_opts: [show_thoughts: true, show_tools: true]
+      )
+
+    {:ok, state} =
+      push_stream_update(
+        state,
+        %{
+          "sessionUpdate" => "tool_call",
+          "toolCallId" => "tool-1",
+          "title" => "Read mix.exs",
+          "kind" => "read",
+          "status" => "in_progress"
+        }
+      )
+
+    assert MapSet.size(state.expanded_entries) == 0
+
+    {state, []} = CodexChatUi.update(:toggle_activity_expand, state)
+    assert MapSet.size(state.expanded_entries) == 1
+
+    {state, []} = CodexChatUi.update(:toggle_activity_expand, state)
+    assert MapSet.size(state.expanded_entries) == 0
   end
 
   defp push_stream_update(state, update) do
