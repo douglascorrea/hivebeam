@@ -152,6 +152,32 @@ defmodule ElxDockerNode.CodexAcpClientTest do
             }, _state} = CodexAcpClient.handle_session_request_permission(request, state)
   end
 
+  test "does not consume unrelated mailbox messages while handling permissions" do
+    assert {:ok, state} =
+             CodexAcpClient.init(
+               bridge: self(),
+               approval_fun: fn _request, _state -> {:ok, true} end
+             )
+
+    request = %{
+      "sessionId" => "s1",
+      "toolCall" => %{"toolCallId" => "tool-1", "title" => "Read file", "status" => "pending"},
+      "options" => [
+        %{"optionId" => "approved", "name" => "Yes", "kind" => "allow_once"},
+        %{"optionId" => "abort", "name" => "No", "kind" => "reject_once"}
+      ]
+    }
+
+    send(self(), {:unrelated_message, :preserve_me})
+
+    assert {:ok,
+            %AcpRequestPermissionResponse{
+              outcome: %{"outcome" => "selected", "optionId" => "approved"}
+            }, _state} = CodexAcpClient.handle_session_request_permission(request, state)
+
+    assert_receive {:unrelated_message, :preserve_me}
+  end
+
   test "maps session/request_permission denial to selected reject option" do
     assert {:ok, state} =
              CodexAcpClient.init(

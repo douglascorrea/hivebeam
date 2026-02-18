@@ -550,7 +550,13 @@ defmodule ElxDockerNode.CodexAcpClient do
     timeout = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
-      message ->
+      {:terminal_finished, _terminal_id, _result} = message ->
+        state
+        |> then(&handle_terminal_message(message, &1))
+        |> do_wait_for_terminal_exit(terminal_id, deadline)
+
+      {:DOWN, ref, :process, _pid, _reason} = message
+      when is_map_key(state.terminal_monitors, ref) ->
         state
         |> then(&handle_terminal_message(message, &1))
         |> do_wait_for_terminal_exit(terminal_id, deadline)
@@ -562,7 +568,13 @@ defmodule ElxDockerNode.CodexAcpClient do
 
   defp drain_terminal_messages(state) do
     receive do
-      message ->
+      {:terminal_finished, _terminal_id, _result} = message ->
+        state
+        |> then(&handle_terminal_message(message, &1))
+        |> drain_terminal_messages()
+
+      {:DOWN, ref, :process, _pid, _reason} = message
+      when is_map_key(state.terminal_monitors, ref) ->
         state
         |> then(&handle_terminal_message(message, &1))
         |> drain_terminal_messages()
