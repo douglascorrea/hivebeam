@@ -639,7 +639,9 @@ defmodule ElxDockerNode.CodexChatUi do
   defp handle_stream_payload(payload, state) do
     case fetch(payload, :event) do
       event when event in [:start, "start"] ->
-        state
+        node = fetch(payload, :node) || Node.self()
+        label = target_label(node)
+        append_unique_status(state, label, "Thinking...")
 
       event when event in [:done, "done"] ->
         %{state | stream_indices: %{}}
@@ -666,6 +668,16 @@ defmodule ElxDockerNode.CodexChatUi do
 
       _ ->
         state
+    end
+  end
+
+  defp append_unique_status(state, node_label, text) do
+    case List.last(state.entries) do
+      %{role: :status, node: ^node_label, text: ^text} ->
+        state
+
+      _ ->
+        append_entry(state, :status, node_label, text)
     end
   end
 
@@ -773,7 +785,7 @@ defmodule ElxDockerNode.CodexChatUi do
 
     case Map.fetch(state.stream_indices, key) do
       {:ok, index} ->
-        if index < length(state.entries) do
+        if index == length(state.entries) - 1 do
           updated_entries =
             List.update_at(state.entries, index, fn entry ->
               %{entry | text: entry.text <> chunk}
