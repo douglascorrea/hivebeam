@@ -6,6 +6,7 @@ defmodule Hivebeam.CodexChatUi do
   alias Hivebeam.FileCompletion
   alias Hivebeam.CodexStream
   alias TermUI.Event
+  alias TermUI.Markdown
   alias TermUI.Renderer.Style
 
   @default_width 100
@@ -24,6 +25,22 @@ defmodule Hivebeam.CodexChatUi do
   @animation_interval_ms 120
 
   @target_mention_pattern ~r/^%([A-Za-z0-9_.-]+)\+([A-Za-z0-9_.-]+)(?:\s+(.*))?$/s
+  @markdown_hint_patterns [
+    ~r/(^|\n)\s{0,3}[#]{1,6}\s+\S/,
+    ~r/(^|\n)\s*[-*+]\s+\S/,
+    ~r/(^|\n)\s*\d+[.)]\s+\S/,
+    ~r/(^|\n)\s{0,3}>\s?\S/,
+    ~r/```/,
+    ~r/!\[[^\]]*\]\([^)]+\)/,
+    ~r/\[[^\]]+\]\([^)]+\)/,
+    ~r/`[^`]+`/,
+    ~r/\*\*[^*]+\*\*/,
+    ~r/__[^_]+__/,
+    ~r/\*[^*\n]+\*/,
+    ~r/_[^_\n]+_/,
+    ~r/~~[^~]+~~/,
+    ~r/(^|\n)\s{0,3}(?:[-*_]\s*){3,}\s*($|\n)/
+  ]
 
   @spec run([node() | nil | map()], keyword(), String.t() | nil, keyword()) ::
           {:ok, term()} | {:error, term()}
@@ -378,9 +395,7 @@ defmodule Hivebeam.CodexChatUi do
       if rendered_lines == [] do
         [text("", nil)]
       else
-        Enum.map(rendered_lines, fn %{text: line, style: style} ->
-          text(line, style)
-        end)
+        Enum.map(rendered_lines, &line_to_node/1)
       end
 
     input_line =
@@ -1008,6 +1023,22 @@ defmodule Hivebeam.CodexChatUi do
     end)
   end
 
+  defp line_to_node(%{segments: segments}) when is_list(segments) do
+    nodes =
+      Enum.map(segments, fn {segment, style} ->
+        text(segment, style)
+      end)
+
+    case nodes do
+      [] -> text("", nil)
+      [single] -> single
+      many -> stack(:horizontal, many)
+    end
+  end
+
+  defp line_to_node(%{text: line, style: style}), do: text(line, style)
+  defp line_to_node(_line), do: text("", nil)
+
   defp entry_to_lines(%{role: :activity} = entry, _index, width, state) do
     entry
     |> activity_lines(false, state)
@@ -1025,12 +1056,44 @@ defmodule Hivebeam.CodexChatUi do
     end)
   end
 
+  defp entry_to_lines(%{role: :assistant} = entry, _index, width, _state) do
+    style = entry_style(entry.role)
+    prefix = entry_prefix(entry)
+    content_padding = String.duplicate(" ", String.length(prefix) + 1)
+    content_width = max(width - String.length(content_padding), 1)
+
+    text = if is_binary(entry.text), do: entry.text, else: ""
+
+    if markdown_candidate?(text) do
+      Markdown.render(text, content_width)
+      |> Enum.with_index()
+      |> Enum.map(fn {segments, line_index} ->
+        leading = if line_index == 0, do: "#{prefix} ", else: content_padding
+
+        styled_segments =
+          segments
+          |> normalize_markdown_segments(style)
+          |> then(&[{leading, style} | &1])
+          |> fit_segments_width(width, style)
+
+        %{segments: styled_segments}
+      end)
+    else
+      plain_prefixed_lines(text, prefix, content_padding, width, style)
+    end
+  end
+
   defp entry_to_lines(entry, _index, width, _state) do
     style = entry_style(entry.role)
     prefix = entry_prefix(entry)
     padding = String.duplicate(" ", String.length(prefix) + 1)
 
-    entry.text
+    text = if is_binary(entry.text), do: entry.text, else: ""
+    plain_prefixed_lines(text, prefix, padding, width, style)
+  end
+
+  defp plain_prefixed_lines(text, prefix, padding, width, style) when is_binary(text) do
+    text
     |> String.split("\n", trim: false)
     |> Enum.with_index()
     |> Enum.flat_map(fn {line, line_index} ->
@@ -1043,6 +1106,75 @@ defmodule Hivebeam.CodexChatUi do
       end)
     end)
   end
+
+  defp plain_prefixed_lines(_text, prefix, padding, width, style),
+    do: plain_prefixed_lines("", prefix, padding, width, style)
+
+  defp markdown_candidate?(text) when is_binary(text) do
+    Enum.any?(@markdown_hint_patterns, &Regex.match?(&1, text))
+  end
+
+  defp markdown_candidate?(_text), do: false
+
+  defp normalize_markdown_segments(segments, base_style) when is_list(segments) do
+    Enum.map(segments, fn
+      {text, markdown_style} when is_binary(text) ->
+        {text, merge_markdown_style(base_style, markdown_style)}
+
+      {text, _markdown_style} ->
+        {to_string(text), base_style}
+
+      text when is_binary(text) ->
+        {text, base_style}
+
+      other ->
+        {to_string(other), base_style}
+    end)
+  end
+
+  defp normalize_markdown_segments(_segments, base_style), do: [{"", base_style}]
+
+  defp merge_markdown_style(base_style, %Style{} = markdown_style),
+    do: Style.merge(base_style, markdown_style)
+
+  defp merge_markdown_style(base_style, _markdown_style), do: base_style
+
+  defp fit_segments_width(segments, width, fallback_style) when width <= 0 do
+    _ = segments
+    [{"", fallback_style}]
+  end
+
+  defp fit_segments_width(segments, width, fallback_style) when is_list(segments) do
+    {reversed_segments, used_width} =
+      Enum.reduce_while(segments, {[], 0}, fn {text, style}, {acc, used} ->
+        safe_text = if is_binary(text), do: text, else: to_string(text)
+        segment_style = if match?(%Style{}, style), do: style, else: fallback_style
+        remaining = width - used
+
+        cond do
+          remaining <= 0 ->
+            {:halt, {acc, used}}
+
+          String.length(safe_text) <= remaining ->
+            {:cont, {[{safe_text, segment_style} | acc], used + String.length(safe_text)}}
+
+          true ->
+            clipped = String.slice(safe_text, 0, remaining)
+            {:halt, {[{clipped, segment_style} | acc], width}}
+        end
+      end)
+
+    fitted = Enum.reverse(reversed_segments)
+
+    if used_width < width do
+      fitted ++ [{String.duplicate(" ", width - used_width), fallback_style}]
+    else
+      fitted
+    end
+  end
+
+  defp fit_segments_width(_segments, width, fallback_style) when is_integer(width) and width > 0,
+    do: [{String.duplicate(" ", width), fallback_style}]
 
   defp activity_lines(entry, expanded?, state) do
     spinner = if entry.running, do: spinner_frame(state.animation_phase), else: "*"

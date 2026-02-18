@@ -126,6 +126,42 @@ defmodule Hivebeam.CodexChatUiTest do
     assert state.follow_output? == true
   end
 
+  test "renders assistant markdown into terminal-friendly lines" do
+    state =
+      CodexChatUi.init(
+        targets: [:"codex@192.168.50.234"],
+        prompt_opts: [show_thoughts: true, show_tools: true]
+      )
+
+    markdown = """
+    # Title
+    - first item
+    > note
+    [docs](https://example.com)
+    ```elixir
+    IO.puts("ok")
+    ```
+    """
+
+    {:ok, state} =
+      push_stream_update(
+        state,
+        %{"type" => "agent_message_chunk", "content" => %{"text" => markdown}}
+      )
+
+    rendered =
+      state
+      |> CodexChatUi.view()
+      |> view_text_lines()
+
+    assert Enum.any?(rendered, &String.contains?(&1, "agent> Title"))
+    assert Enum.any?(rendered, &String.contains?(&1, "• first item"))
+    assert Enum.any?(rendered, &String.contains?(&1, "│ note"))
+    assert Enum.any?(rendered, &String.contains?(&1, "docs (https://example.com)"))
+    assert Enum.any?(rendered, &String.contains?(&1, "┌─ elixir"))
+    assert Enum.any?(rendered, &String.contains?(&1, "IO.puts(\"ok\")"))
+  end
+
   test "leading %node+agent routes prompt to explicit target" do
     state =
       CodexChatUi.init(
@@ -266,4 +302,20 @@ defmodule Hivebeam.CodexChatUiTest do
         :ok
     end
   end
+
+  defp view_text_lines(%{children: children}) when is_list(children) do
+    Enum.map(children, fn child ->
+      child
+      |> render_node_text()
+      |> String.trim_trailing()
+    end)
+  end
+
+  defp render_node_text(%{content: content}) when is_binary(content), do: content
+
+  defp render_node_text(%{children: children}) when is_list(children) do
+    Enum.map_join(children, "", &render_node_text/1)
+  end
+
+  defp render_node_text(_node), do: ""
 end
