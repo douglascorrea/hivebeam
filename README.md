@@ -29,7 +29,7 @@ mix hivebeam gateway run
 Or with explicit options:
 
 ```bash
-mix hivebeam gateway run --bind 0.0.0.0:8080 --token "replace-with-strong-token"
+mix hivebeam gateway run --bind 0.0.0.0:8080 --token "replace-with-strong-token" --sandbox-root "$PWD"
 ```
 
 Default bind is `0.0.0.0:8080`; APIs are exposed under `/v1`.
@@ -61,6 +61,16 @@ Gateway `approval_mode` is authoritative for gateway-created sessions.
 - `provider=claude` sessions are created with project-only settings sources (`settingSources=["project"]`) to avoid user/local machine permission policy inheritance.
 - Session startup fails fast and remains degraded if permission-mode enforcement cannot be applied.
 
+## Sandbox enforcement
+
+Session creation and tool operations are sandboxed by path policy.
+
+- Session creation canonicalizes `cwd` and rejects out-of-sandbox paths.
+- Approval requests targeting out-of-sandbox paths are auto-denied by the gateway worker.
+- ACP filesystem/terminal operations are hard-blocked outside the sandbox (defense in depth).
+- Session create request accepts `dangerously: true` to bypass sandbox checks for that session.
+- Global bypass flag: `mix hivebeam gateway run --dangerously` (or `HIVEBEAM_GATEWAY_DANGEROUSLY=true`).
+
 ## Configuration
 
 Gateway:
@@ -71,6 +81,9 @@ Gateway:
 - `HIVEBEAM_GATEWAY_MAX_EVENTS_PER_SESSION` (default `50000`)
 - `HIVEBEAM_GATEWAY_RECONNECT_MS` (default `2000`)
 - `HIVEBEAM_GATEWAY_APPROVAL_TIMEOUT_MS` (default `120000`)
+- `HIVEBEAM_GATEWAY_SANDBOX_ALLOWED_ROOTS` (path-separated roots, default `HIVEBEAM_GATEWAY_SANDBOX_DEFAULT_ROOT`)
+- `HIVEBEAM_GATEWAY_SANDBOX_DEFAULT_ROOT` (default process cwd at boot)
+- `HIVEBEAM_GATEWAY_DANGEROUSLY` (default `false`)
 
 ACP provider commands:
 
@@ -110,3 +123,9 @@ Release tags publish the same `api/v1/*` files as release assets (`api-v1/*`) so
 ### SDK compatibility matrix
 
 See the Elixir SDK matrix in `hivebeam-client-elixir/COMPATIBILITY.md` (or that repository root `COMPATIBILITY.md`) for SDK-to-contract support mapping.
+
+## Capabilities and roadmap
+
+Detailed gateway support matrix and architecture recommendations:
+
+- `docs/gateway-capabilities.md`

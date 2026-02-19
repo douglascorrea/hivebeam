@@ -39,6 +39,12 @@ defmodule Hivebeam.Gateway.HTTP.Router do
       {:ok, session} ->
         send_json(conn, 200, session_payload(session))
 
+      {:error, {:sandbox_violation, details}} ->
+        send_json(conn, 422, %{error: "cwd_outside_sandbox", details: details})
+
+      {:error, {:invalid_cwd, reason}} ->
+        send_json(conn, 422, %{error: "invalid_cwd", reason: to_string(reason)})
+
       {:error, reason} ->
         send_json(conn, 500, %{error: inspect(reason)})
     end

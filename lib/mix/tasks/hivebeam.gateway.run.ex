@@ -5,7 +5,14 @@ defmodule Mix.Tasks.Hivebeam.Gateway.Run do
 
   @shortdoc "Starts Hivebeam gateway (HTTP + WebSocket) and blocks"
 
-  @switches [bind: :string, token: :string, data_dir: :string]
+  @switches [
+    bind: :string,
+    token: :string,
+    data_dir: :string,
+    sandbox_root: :keep,
+    sandbox_default_root: :string,
+    dangerously: :boolean
+  ]
 
   @impl Mix.Task
   def run(args) do
@@ -20,6 +27,33 @@ defmodule Mix.Tasks.Hivebeam.Gateway.Run do
 
     if value = Keyword.get(opts, :data_dir),
       do: System.put_env("HIVEBEAM_GATEWAY_DATA_DIR", value)
+
+    sandbox_roots =
+      opts
+      |> Keyword.get_values(:sandbox_root)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if sandbox_roots != [] do
+      separator =
+        case :os.type() do
+          {:win32, _} -> ";"
+          _ -> ":"
+        end
+
+      System.put_env(
+        "HIVEBEAM_GATEWAY_SANDBOX_ALLOWED_ROOTS",
+        Enum.join(sandbox_roots, separator)
+      )
+    end
+
+    if value = Keyword.get(opts, :sandbox_default_root) do
+      System.put_env("HIVEBEAM_GATEWAY_SANDBOX_DEFAULT_ROOT", value)
+    end
+
+    if Keyword.get(opts, :dangerously, false) do
+      System.put_env("HIVEBEAM_GATEWAY_DANGEROUSLY", "true")
+    end
 
     :ok = Config.require_token!()
 

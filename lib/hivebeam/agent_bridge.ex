@@ -66,6 +66,8 @@ defmodule Hivebeam.AgentBridge do
       |> Map.get(:approval_mode, :ask)
       |> normalize_approval_mode(:ask)
 
+    tool_cwd = Map.get(config, :tool_cwd, File.cwd!())
+
     state = %{
       acp_client_module: acp_client_module,
       connection_module: connection_module,
@@ -85,7 +87,10 @@ defmodule Hivebeam.AgentBridge do
       prompt_timeout_ms: Map.get(config, :prompt_timeout_ms, CodexConfig.prompt_timeout_ms()),
       reconnect_ms: Map.get(config, :reconnect_ms, CodexConfig.reconnect_ms()),
       reconnect_timer_ref: nil,
-      tool_cwd: Map.get(config, :tool_cwd, File.cwd!()),
+      tool_cwd: tool_cwd,
+      sandbox_roots: Map.get(config, :sandbox_roots, [tool_cwd]) |> List.wrap(),
+      sandbox_default_root: Map.get(config, :sandbox_default_root, tool_cwd),
+      dangerously: normalize_dangerously(Map.get(config, :dangerously, false)),
       default_approval_mode: default_approval_mode,
       approval_timeout_ms: Map.get(config, :approval_timeout_ms, @default_approval_timeout_ms),
       enforced_provider_mode: nil
@@ -431,11 +436,18 @@ defmodule Hivebeam.AgentBridge do
 
   defp connect_if_possible(state) do
     opts = [agent_path: state.agent_path, agent_args: state.agent_args]
-    handler_args = [bridge: self(), tool_cwd: state.tool_cwd]
+
+    handler_args = [
+      bridge: self(),
+      tool_cwd: state.tool_cwd,
+      sandbox_roots: state.sandbox_roots,
+      sandbox_default_root: state.sandbox_default_root,
+      dangerously: state.dangerously
+    ]
 
     start_result =
       try do
-        state.acp_client_module.start_client(Hivebeam.CodexAcpClient, handler_args, opts)
+        state.acp_client_module.start_client(Hivebeam.AcpClient, handler_args, opts)
       catch
         :exit, reason -> {:error, {:start_client_exit, reason}}
       end
@@ -782,6 +794,20 @@ defmodule Hivebeam.AgentBridge do
   end
 
   defp normalize_provider(_provider), do: @default_provider
+
+  defp normalize_dangerously(value) when is_boolean(value), do: value
+
+  defp normalize_dangerously(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "1" -> true
+      "true" -> true
+      "yes" -> true
+      "on" -> true
+      _ -> false
+    end
+  end
+
+  defp normalize_dangerously(_value), do: false
 
   defp provider_title("claude"), do: "Claude"
   defp provider_title("codex"), do: "Codex"

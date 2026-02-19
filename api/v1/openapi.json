@@ -67,6 +67,9 @@
               }
             }
           },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -458,6 +461,9 @@
           "approval_mode": {
             "type": "string",
             "enum": ["ask", "allow", "deny"]
+          },
+          "dangerously": {
+            "type": "boolean"
           },
           "client_session_ref": {
             "type": "string"

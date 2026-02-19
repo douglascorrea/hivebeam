@@ -59,34 +59,66 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
         {:codex_prompt_stream, %{event: :start, update: %{"type" => "agent_message_chunk"}}}
       )
 
-      if text == "needs approval" do
-        ref = make_ref()
+      cond do
+        text == "needs approval" ->
+          ref = make_ref()
 
-        send(
-          approval_to,
-          {:codex_tool_approval_request,
-           %{ref: ref, reply_to: self(), request: %{operation: "terminal/create"}}}
-        )
+          send(
+            approval_to,
+            {:codex_tool_approval_request,
+             %{ref: ref, reply_to: self(), request: %{operation: "terminal/create"}}}
+          )
 
-        receive do
-          {:codex_tool_approval_reply, ^ref, true} ->
-            send(stream_to, {:codex_prompt_stream, %{event: :status, message: "approved"}})
+          receive do
+            {:codex_tool_approval_reply, ^ref, true} ->
+              send(stream_to, {:codex_prompt_stream, %{event: :status, message: "approved"}})
 
-          {:codex_tool_approval_reply, ^ref, false} ->
-            send(stream_to, {:codex_prompt_stream, %{event: :status, message: "denied"}})
-        after
-          500 ->
-            send(
-              stream_to,
-              {:codex_prompt_stream, %{event: :status, message: "approval_timeout"}}
-            )
-        end
-      else
-        send(
-          stream_to,
-          {:codex_prompt_stream,
-           %{event: :update, update: %{"type" => "agent_message_chunk", "text" => "hello"}}}
-        )
+            {:codex_tool_approval_reply, ^ref, false} ->
+              send(stream_to, {:codex_prompt_stream, %{event: :status, message: "denied"}})
+          after
+            500 ->
+              send(
+                stream_to,
+                {:codex_prompt_stream, %{event: :status, message: "approval_timeout"}}
+              )
+          end
+
+        text == "blocked approval" ->
+          ref = make_ref()
+
+          send(
+            approval_to,
+            {:codex_tool_approval_request,
+             %{
+               ref: ref,
+               reply_to: self(),
+               request: %{operation: "fs/write_text_file", details: %{path: "/etc/hivebeam.txt"}}
+             }}
+          )
+
+          receive do
+            {:codex_tool_approval_reply, ^ref, true} ->
+              send(
+                stream_to,
+                {:codex_prompt_stream, %{event: :status, message: "unexpected_allow"}}
+              )
+
+            {:codex_tool_approval_reply, ^ref, false} ->
+              send(stream_to, {:codex_prompt_stream, %{event: :status, message: "auto_denied"}})
+          after
+            500 ->
+              send(
+                stream_to,
+                {:codex_prompt_stream, %{event: :status, message: "approval_timeout"}}
+              )
+          end
+
+        true ->
+          send(
+            stream_to,
+            {:codex_prompt_stream,
+             %{event: :update, update: %{"type" => "agent_message_chunk", "text" => "hello"}}}
+          )
       end
 
       send(stream_to, {:codex_prompt_stream, %{event: :done}})
@@ -220,6 +252,51 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
     assert Enum.any?(replay.events, &(&1.kind == "approval_resolved"))
   end
 
+  test "auto-denies sandbox-violating approval requests" do
+    key = "hbs_worker_sandbox_deny"
+
+    assert {:ok, _session} =
+             Store.upsert_session(%{
+               gateway_session_key: key,
+               provider: "codex",
+               cwd: File.cwd!(),
+               sandbox_roots: [File.cwd!()],
+               sandbox_default_root: File.cwd!(),
+               dangerously: false,
+               approval_mode: :ask,
+               status: "creating",
+               connected: false,
+               in_flight: false,
+               upstream_session_id: nil,
+               created_at: now_iso(),
+               updated_at: now_iso(),
+               last_seq: 0
+             })
+
+    assert {:ok, worker} =
+             SessionWorker.start_link(
+               session_key: key,
+               bridge_module: FakeBridge,
+               recovered?: false
+             )
+
+    assert {:ok, %{accepted: true, request_id: "req-sandbox-1"}} =
+             GenServer.call(worker, {:prompt, "req-sandbox-1", "blocked approval", 2_000}, 5_000)
+
+    wait_until(fn ->
+      case Store.get_request(key, "req-sandbox-1") do
+        {:ok, %{status: "completed"}} -> true
+        _ -> false
+      end
+    end)
+
+    assert {:ok, replay} = Store.read_events(key, 0, 100)
+    kinds = Enum.map(replay.events, & &1.kind)
+
+    assert "approval_auto_denied" in kinds
+    refute "approval_requested" in kinds
+  end
+
   test "resolves provider-specific bridge module from gateway_bridge_modules map" do
     key = "hbs_worker_claude_provider"
 
@@ -254,6 +331,41 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
 
     assert {:ok, replay} = Store.read_events(key, 0, 50)
     assert Enum.any?(replay.events, &(&1.kind == "prompt_completed"))
+  end
+
+  test "does not respawn worker after close" do
+    key = "hbs_worker_close_no_respawn"
+
+    assert {:ok, _session} =
+             Store.upsert_session(%{
+               gateway_session_key: key,
+               provider: "codex",
+               cwd: File.cwd!(),
+               approval_mode: :ask,
+               status: "creating",
+               connected: false,
+               in_flight: false,
+               upstream_session_id: nil,
+               created_at: now_iso(),
+               updated_at: now_iso(),
+               last_seq: 0
+             })
+
+    assert {:ok, worker} =
+             SessionWorker.start_link(
+               session_key: key,
+               bridge_module: FakeBridge,
+               recovered?: false
+             )
+
+    ref = Process.monitor(worker)
+
+    assert {:ok, %{closed: true}} = GenServer.call(worker, :close, 5_000)
+    assert_receive {:DOWN, ^ref, :process, ^worker, :normal}, 1_000
+
+    wait_until(fn ->
+      Registry.lookup(Hivebeam.Gateway.WorkerRegistry, {:session_worker, key}) == []
+    end)
   end
 
   defp now_iso do

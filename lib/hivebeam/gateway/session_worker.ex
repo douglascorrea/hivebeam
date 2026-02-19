@@ -14,6 +14,19 @@ defmodule Hivebeam.Gateway.SessionWorker do
 
   @sync_interval_ms 1_000
 
+  @spec child_spec(keyword()) :: Supervisor.child_spec()
+  def child_spec(opts) when is_list(opts) do
+    session_key = Keyword.fetch!(opts, :session_key)
+
+    %{
+      id: {:session_worker, session_key},
+      start: {__MODULE__, :start_link, [opts]},
+      type: :worker,
+      restart: :transient,
+      shutdown: 5_000
+    }
+  end
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     session_key = Keyword.fetch!(opts, :session_key)
@@ -30,12 +43,23 @@ defmodule Hivebeam.Gateway.SessionWorker do
 
     with {:ok, session} <- Store.get_session(session_key) do
       provider = normalize_provider(Map.get(session, :provider, "codex"))
+      cwd = normalize_cwd(Map.get(session, :cwd, File.cwd!()))
+      sandbox_roots = normalize_sandbox_roots(Map.get(session, :sandbox_roots), cwd)
+
+      sandbox_default_root =
+        case Config.canonicalize_path(Map.get(session, :sandbox_default_root, cwd)) do
+          {:ok, canonical_root} -> canonical_root
+          _ -> List.first(sandbox_roots) || cwd
+        end
 
       state = %{
         session_key: session_key,
         bridge_name: SessionRouter.bridge_name(session_key),
         provider: provider,
-        cwd: Map.get(session, :cwd, File.cwd!()),
+        cwd: cwd,
+        sandbox_roots: sandbox_roots,
+        sandbox_default_root: sandbox_default_root,
+        dangerously: normalize_dangerously(Map.get(session, :dangerously, false)),
         approval_mode: Map.get(session, :approval_mode, :ask),
         bridge_module: resolve_bridge_module(opts, provider),
         bridge_config: Keyword.get(opts, :bridge_config, %{}),
@@ -184,29 +208,49 @@ defmodule Hivebeam.Gateway.SessionWorker do
 
   def handle_info({:codex_tool_approval_request, payload}, state) when is_map(payload) do
     approval_ref = "apr_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
-    ref = Map.get(payload, :ref)
-    reply_to = Map.get(payload, :reply_to)
+    ref = fetch_field(payload, :ref)
+    reply_to = fetch_field(payload, :reply_to)
+    request = fetch_field(payload, :request) || %{}
 
     if is_reference(ref) and is_pid(reply_to) do
-      timer_ref =
-        Process.send_after(self(), {:approval_timeout, approval_ref}, state.approval_timeout_ms)
+      case sandbox_decision(state, request) do
+        :allow ->
+          timer_ref =
+            Process.send_after(
+              self(),
+              {:approval_timeout, approval_ref},
+              state.approval_timeout_ms
+            )
 
-      pending =
-        Map.put(state.pending_approvals, approval_ref, %{
-          ref: ref,
-          reply_to: reply_to,
-          timer_ref: timer_ref
-        })
+          pending =
+            Map.put(state.pending_approvals, approval_ref, %{
+              ref: ref,
+              reply_to: reply_to,
+              timer_ref: timer_ref
+            })
 
-      state =
-        state
-        |> Map.put(:pending_approvals, pending)
-        |> append_and_broadcast("approval_requested", "gateway", %{
-          approval_ref: approval_ref,
-          request: sanitize_payload(Map.get(payload, :request, %{}))
-        })
+          state =
+            state
+            |> Map.put(:pending_approvals, pending)
+            |> append_and_broadcast("approval_requested", "gateway", %{
+              approval_ref: approval_ref,
+              request: sanitize_payload(request)
+            })
 
-      {:noreply, state}
+          {:noreply, state}
+
+        {:deny, reason} ->
+          send(reply_to, {:codex_tool_approval_reply, ref, false})
+
+          state =
+            append_and_broadcast(state, "approval_auto_denied", "gateway", %{
+              approval_ref: approval_ref,
+              request: sanitize_payload(request),
+              reason: sanitize_payload(reason)
+            })
+
+          {:noreply, state}
+      end
     else
       {:noreply, state}
     end
@@ -321,6 +365,9 @@ defmodule Hivebeam.Gateway.SessionWorker do
           acp_provider: provider,
           acp_command: command,
           tool_cwd: state.cwd,
+          sandbox_roots: state.sandbox_roots,
+          sandbox_default_root: state.sandbox_default_root,
+          dangerously: state.dangerously,
           approval_mode: state.approval_mode,
           approval_timeout_ms: state.approval_timeout_ms
         }
@@ -596,6 +643,118 @@ defmodule Hivebeam.Gateway.SessionWorker do
   defp default_bridge_module("claude"), do: ClaudeBridge
   defp default_bridge_module("codex"), do: CodexBridge
   defp default_bridge_module(_), do: CodexBridge
+
+  defp normalize_cwd(path) when is_binary(path) do
+    case Config.canonicalize_path(path) do
+      {:ok, canonical_path} -> canonical_path
+      _ -> Path.expand(path)
+    end
+  end
+
+  defp normalize_cwd(_), do: File.cwd!()
+
+  defp normalize_sandbox_roots(roots, cwd) do
+    roots
+    |> List.wrap()
+    |> Enum.reduce([], fn root, acc ->
+      if is_binary(root) and root != "" do
+        case Config.canonicalize_path(root) do
+          {:ok, canonical_root} -> [canonical_root | acc]
+          _ -> acc
+        end
+      else
+        acc
+      end
+    end)
+    |> Enum.reverse()
+    |> Enum.uniq()
+    |> case do
+      [] -> [cwd]
+      values -> values
+    end
+  end
+
+  defp normalize_dangerously(value) when is_boolean(value), do: value
+
+  defp normalize_dangerously(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "1" -> true
+      "true" -> true
+      "yes" -> true
+      "on" -> true
+      _ -> false
+    end
+  end
+
+  defp normalize_dangerously(_), do: false
+
+  defp sandbox_decision(state, _request) when state.dangerously, do: :allow
+
+  defp sandbox_decision(state, request) do
+    case extract_request_path(request) do
+      :no_path ->
+        :allow
+
+      {:ok, operation, path} ->
+        case Config.ensure_path_allowed(path, state.sandbox_roots, dangerously: false) do
+          :ok ->
+            :allow
+
+          {:error, {:sandbox_violation, details}} ->
+            {:deny, Map.put(details, :operation, operation)}
+
+          {:error, reason} ->
+            {:deny, %{operation: operation, reason: inspect(reason), path: path}}
+        end
+    end
+  end
+
+  defp extract_request_path(request) when is_map(request) do
+    operation =
+      request
+      |> fetch_field(:operation)
+      |> normalize_operation()
+
+    details = fetch_field(request, :details)
+    details = if is_map(details), do: details, else: %{}
+
+    path =
+      case operation do
+        "fs/read_text_file" -> fetch_field(details, :path)
+        "fs/write_text_file" -> fetch_field(details, :path)
+        "terminal/create" -> fetch_field(details, :cwd) || fetch_field(details, :path)
+        _ -> fetch_field(details, :path) || fetch_field(details, :cwd)
+      end
+
+    if is_binary(path) and String.trim(path) != "" do
+      {:ok, operation, path}
+    else
+      :no_path
+    end
+  end
+
+  defp extract_request_path(_request), do: :no_path
+
+  defp fetch_field(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp fetch_field(_map, _key), do: nil
+
+  defp normalize_operation(operation) when is_binary(operation) do
+    case String.trim(operation) do
+      "" -> "unknown"
+      value -> value
+    end
+  end
+
+  defp normalize_operation(operation) when is_atom(operation) do
+    operation
+    |> Atom.to_string()
+    |> normalize_operation()
+  end
+
+  defp normalize_operation(_operation), do: "unknown"
 
   defp queue_len(queue), do: :queue.len(queue)
 

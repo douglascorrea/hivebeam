@@ -4,6 +4,7 @@
       "provider": "codex",
       "cwd": "/tmp",
       "approval_mode": "ask",
+      "dangerously": false,
       "client_session_ref": "my-chat-session"
     },
     "attach": {

@@ -12,7 +12,7 @@ defmodule Mix.Tasks.Hivebeam do
   def run(_args) do
     Mix.shell().info("""
     Usage:
-      mix hivebeam gateway run [--bind 0.0.0.0:8080] [--token <token>] [--data-dir <path>]
+      mix hivebeam gateway run [--bind 0.0.0.0:8080] [--token <token>] [--data-dir <path>] [--sandbox-root <path>] [--sandbox-default-root <path>] [--dangerously]
     """)
   end
 end

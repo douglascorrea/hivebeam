@@ -158,6 +158,35 @@ defmodule Hivebeam.Gateway.HttpApiTest do
     assert conn.status == 401
   end
 
+  test "rejects session creation when cwd is outside sandbox roots" do
+    previous_roots = System.get_env("HIVEBEAM_GATEWAY_SANDBOX_ALLOWED_ROOTS")
+    System.put_env("HIVEBEAM_GATEWAY_SANDBOX_ALLOWED_ROOTS", File.cwd!())
+
+    on_exit(fn ->
+      if previous_roots do
+        System.put_env("HIVEBEAM_GATEWAY_SANDBOX_ALLOWED_ROOTS", previous_roots)
+      else
+        System.delete_env("HIVEBEAM_GATEWAY_SANDBOX_ALLOWED_ROOTS")
+      end
+    end)
+
+    outside_cwd =
+      Path.join(System.tmp_dir!(), "hivebeam_http_outside_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(outside_cwd)
+
+    body = Jason.encode!(%{"provider" => "codex", "cwd" => outside_cwd, "approval_mode" => "ask"})
+
+    response =
+      conn(:post, "/v1/sessions", body)
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer test-token")
+      |> Router.call(Router.init([]))
+
+    assert response.status == 422
+    assert Jason.decode!(response.resp_body)["error"] == "cwd_outside_sandbox"
+  end
+
   defp wait_until(fun, attempts \\ 80)
 
   defp wait_until(_fun, 0), do: flunk("condition was not met in time")

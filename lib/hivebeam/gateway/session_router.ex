@@ -1,6 +1,7 @@
 defmodule Hivebeam.Gateway.SessionRouter do
   @moduledoc false
 
+  alias Hivebeam.Gateway.Config
   alias Hivebeam.Gateway.EventLog
   alias Hivebeam.Gateway.SessionSupervisor
   alias Hivebeam.Gateway.SessionWorker
@@ -13,13 +14,25 @@ defmodule Hivebeam.Gateway.SessionRouter do
   @spec create_session(map()) :: {:ok, map()} | {:error, term()}
   def create_session(attrs \\ %{}) when is_map(attrs) do
     provider = normalize_provider(Map.get(attrs, "provider") || Map.get(attrs, :provider))
-    cwd = normalize_cwd(Map.get(attrs, "cwd") || Map.get(attrs, :cwd))
+    raw_cwd = Map.get(attrs, "cwd") || Map.get(attrs, :cwd)
 
     approval_mode =
       attrs
       |> Map.get("approval_mode")
       |> Kernel.||(Map.get(attrs, :approval_mode))
       |> normalize_approval_mode()
+
+    dangerously =
+      case Map.fetch(attrs, "dangerously") do
+        {:ok, value} ->
+          normalize_dangerously(value)
+
+        :error ->
+          case Map.fetch(attrs, :dangerously) do
+            {:ok, value} -> normalize_dangerously(value)
+            :error -> Config.sandbox_dangerously_enabled?()
+          end
+      end
 
     key =
       attrs
@@ -34,25 +47,31 @@ defmodule Hivebeam.Gateway.SessionRouter do
         end
 
       {:error, :not_found} ->
-        now = now_iso()
-
-        session = %{
-          gateway_session_key: key,
-          provider: provider,
-          cwd: cwd,
-          approval_mode: approval_mode,
-          status: "creating",
-          connected: false,
-          in_flight: false,
-          upstream_session_id: nil,
-          created_at: now,
-          updated_at: now,
-          last_seq: 0
-        }
-
-        with {:ok, _persisted_session} <- Store.upsert_session(session),
+        with {:ok, sandbox} <-
+               Config.normalize_session_cwd(raw_cwd, dangerously: dangerously),
+             now <- now_iso(),
+             session <- %{
+               gateway_session_key: key,
+               provider: provider,
+               cwd: sandbox.cwd,
+               approval_mode: approval_mode,
+               dangerously: sandbox.dangerously,
+               sandbox_default_root: sandbox.sandbox_default_root,
+               sandbox_roots: sandbox.sandbox_roots,
+               status: "creating",
+               connected: false,
+               in_flight: false,
+               upstream_session_id: nil,
+               created_at: now,
+               updated_at: now,
+               last_seq: 0
+             },
+             {:ok, _persisted_session} <- Store.upsert_session(session),
              {:ok, _event} <-
-               EventLog.append(key, "session_created", "gateway", %{provider: provider}),
+               EventLog.append(key, "session_created", "gateway", %{
+                 provider: provider,
+                 dangerously: sandbox.dangerously
+               }),
              {:ok, _pid} <- ensure_worker(key, recovered?: false),
              {:ok, updated} <- Store.get_session(key) do
           {:ok, updated}
@@ -223,17 +242,6 @@ defmodule Hivebeam.Gateway.SessionRouter do
     end
   end
 
-  defp normalize_cwd(nil), do: File.cwd!()
-
-  defp normalize_cwd(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> File.cwd!()
-      path -> Path.expand(path)
-    end
-  end
-
-  defp normalize_cwd(_), do: File.cwd!()
-
   defp normalize_approval_mode(mode) do
     case mode do
       :allow -> :allow
@@ -243,6 +251,20 @@ defmodule Hivebeam.Gateway.SessionRouter do
       _ -> :ask
     end
   end
+
+  defp normalize_dangerously(value) when is_boolean(value), do: value
+
+  defp normalize_dangerously(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "1" -> true
+      "true" -> true
+      "yes" -> true
+      "on" -> true
+      _ -> false
+    end
+  end
+
+  defp normalize_dangerously(_), do: false
 
   defp normalize_timeout(value) when is_integer(value) and value > 0, do: value
   defp normalize_timeout(_value), do: 120_000

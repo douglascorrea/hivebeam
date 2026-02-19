@@ -1,10 +1,11 @@
-defmodule Hivebeam.CodexAcpClient do
+defmodule Hivebeam.AcpClient do
   @moduledoc false
   @behaviour Hivebeam.Acp.ClientHandler
 
   require Logger
 
   alias Hivebeam.CodexBridge
+  alias Hivebeam.Gateway.Config
 
   @default_approval_timeout_ms 120_000
   @default_terminal_output_limit 200_000
@@ -12,10 +13,31 @@ defmodule Hivebeam.CodexAcpClient do
 
   @impl true
   def init(args) do
+    tool_cwd =
+      args
+      |> Keyword.get(:tool_cwd, File.cwd!())
+      |> resolve_path(File.cwd!())
+
+    sandbox_roots =
+      args
+      |> Keyword.get(:sandbox_roots, [tool_cwd])
+      |> normalize_sandbox_roots(tool_cwd)
+
+    sandbox_default_root =
+      args
+      |> Keyword.get(:sandbox_default_root, tool_cwd)
+      |> normalize_sandbox_default_root(tool_cwd, sandbox_roots)
+
     {:ok,
      %{
        bridge: Keyword.fetch!(args, :bridge),
-       tool_cwd: Keyword.get(args, :tool_cwd, File.cwd!()),
+       tool_cwd: tool_cwd,
+       sandbox_roots: sandbox_roots,
+       sandbox_default_root: sandbox_default_root,
+       dangerously:
+         args
+         |> Keyword.get(:dangerously, Config.sandbox_dangerously_enabled?())
+         |> normalize_dangerously(),
        approval_timeout_ms: Keyword.get(args, :approval_timeout_ms, @default_approval_timeout_ms),
        approval_fun: Keyword.get(args, :approval_fun, &default_approval/2),
        terminals: %{},
@@ -74,7 +96,8 @@ defmodule Hivebeam.CodexAcpClient do
     line = fetch(request, :line)
     limit = fetch(request, :limit)
 
-    with :ok <- ensure_approved(state, "fs/read_text_file", %{path: path}),
+    with :ok <- ensure_sandbox_path(state, "fs/read_text_file", path),
+         :ok <- ensure_approved(state, "fs/read_text_file", %{path: path}),
          {:ok, content} <- File.read(path) do
       content = apply_line_limit(content, line, limit)
       {:ok, %{"content" => content}, state}
@@ -89,7 +112,8 @@ defmodule Hivebeam.CodexAcpClient do
     path = resolve_path(fetch(request, :path), state.tool_cwd)
     content = fetch(request, :content) || ""
 
-    with :ok <- ensure_approved(state, "fs/write_text_file", %{path: path}),
+    with :ok <- ensure_sandbox_path(state, "fs/write_text_file", path),
+         :ok <- ensure_approved(state, "fs/write_text_file", %{path: path}),
          :ok <- ensure_parent_dir(path),
          :ok <- File.write(path, content) do
       {:ok, %{}, state}
@@ -112,6 +136,7 @@ defmodule Hivebeam.CodexAcpClient do
     args = fetch(request, :args) |> List.wrap()
 
     with true <- is_binary(command) and command != "",
+         :ok <- ensure_sandbox_path(state, "terminal/create", cwd),
          :ok <-
            ensure_approved(state, "terminal/create", %{command: command, args: args, cwd: cwd}) do
       terminal_id = "term-" <> Integer.to_string(System.unique_integer([:positive]))
@@ -248,6 +273,19 @@ defmodule Hivebeam.CodexAcpClient do
       bridge_name: state.bridge,
       timeout: state.approval_timeout_ms
     )
+  end
+
+  defp ensure_sandbox_path(state, operation, path) do
+    case Config.ensure_path_allowed(path, state.sandbox_roots, dangerously: state.dangerously) do
+      :ok ->
+        :ok
+
+      {:error, {:sandbox_violation, details}} ->
+        {:error, sandbox_error(operation, details)}
+
+      {:error, reason} ->
+        {:error, sandbox_error(operation, %{path: path, reason: inspect(reason)})}
+    end
   end
 
   defp ensure_approved(state, operation, details) do
@@ -685,6 +723,63 @@ defmodule Hivebeam.CodexAcpClient do
   defp io_error(message, reason) do
     %{code: -32_001, message: "#{message}: #{inspect(reason)}"}
   end
+
+  defp sandbox_error(operation, details) do
+    %{
+      code: -32_004,
+      message: "#{operation} blocked by sandbox policy",
+      details: details
+    }
+  end
+
+  defp normalize_sandbox_roots(roots, tool_cwd) do
+    roots
+    |> List.wrap()
+    |> Enum.reduce([], fn root, acc ->
+      if is_binary(root) and root != "" do
+        case Config.canonicalize_path(root) do
+          {:ok, canonical_root} -> [canonical_root | acc]
+          _ -> acc
+        end
+      else
+        acc
+      end
+    end)
+    |> Enum.reverse()
+    |> Enum.uniq()
+    |> case do
+      [] -> [tool_cwd]
+      values -> values
+    end
+  end
+
+  defp normalize_sandbox_default_root(default_root, tool_cwd, sandbox_roots) do
+    candidate =
+      if is_binary(default_root) and default_root != "" do
+        default_root
+      else
+        tool_cwd
+      end
+
+    case Config.canonicalize_path(candidate) do
+      {:ok, canonical_root} -> canonical_root
+      _ -> List.first(sandbox_roots) || tool_cwd
+    end
+  end
+
+  defp normalize_dangerously(value) when is_boolean(value), do: value
+
+  defp normalize_dangerously(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "1" -> true
+      "true" -> true
+      "yes" -> true
+      "on" -> true
+      _ -> false
+    end
+  end
+
+  defp normalize_dangerously(_value), do: false
 
   defp fetch(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

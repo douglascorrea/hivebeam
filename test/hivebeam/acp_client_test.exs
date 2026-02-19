@@ -1,13 +1,13 @@
-defmodule Hivebeam.CodexAcpClientTest do
+defmodule Hivebeam.AcpClientTest do
   use ExUnit.Case, async: true
 
-  alias Hivebeam.CodexAcpClient
+  alias Hivebeam.AcpClient
 
   test "forwards session updates to the bridge process" do
-    assert {:ok, state} = CodexAcpClient.init(bridge: self())
+    assert {:ok, state} = AcpClient.init(bridge: self())
 
     assert {:noreply, ^state} =
-             CodexAcpClient.handle_notification(
+             AcpClient.handle_notification(
                "session/update",
                %{"sessionId" => "session-1", "update" => %{"type" => "agent_message_chunk"}},
                state
@@ -22,21 +22,21 @@ defmodule Hivebeam.CodexAcpClientTest do
     file_path = Path.join(tmp_dir, "sample.txt")
 
     assert {:ok, state} =
-             CodexAcpClient.init(
+             AcpClient.init(
                bridge: self(),
                tool_cwd: tmp_dir,
                approval_fun: fn _request, _state -> {:ok, true} end
              )
 
     assert {:ok, %{}, state} =
-             CodexAcpClient.handle_request(
+             AcpClient.handle_request(
                "fs/write_text_file",
                %{"sessionId" => "s1", "path" => file_path, "content" => "line1\nline2"},
                state
              )
 
     assert {:ok, %{"content" => "line2"}, _state} =
-             CodexAcpClient.handle_request(
+             AcpClient.handle_request(
                "fs/read_text_file",
                %{"sessionId" => "s1", "path" => file_path, "line" => 2, "limit" => 1},
                state
@@ -47,14 +47,14 @@ defmodule Hivebeam.CodexAcpClientTest do
     tmp_dir = unique_tmp_dir("codex_acp_terminal")
 
     assert {:ok, state} =
-             CodexAcpClient.init(
+             AcpClient.init(
                bridge: self(),
                tool_cwd: tmp_dir,
                approval_fun: fn _request, _state -> {:ok, true} end
              )
 
     assert {:ok, %{"terminalId" => terminal_id}, state} =
-             CodexAcpClient.handle_request(
+             AcpClient.handle_request(
                "terminal/create",
                %{
                  "sessionId" => "s1",
@@ -65,14 +65,14 @@ defmodule Hivebeam.CodexAcpClientTest do
              )
 
     assert {:ok, %{"exitCode" => 0}, state} =
-             CodexAcpClient.handle_request(
+             AcpClient.handle_request(
                "terminal/wait_for_exit",
                %{"sessionId" => "s1", "terminalId" => terminal_id},
                state
              )
 
     assert {:ok, %{"output" => output, "exitStatus" => %{"exitCode" => 0}}, state} =
-             CodexAcpClient.handle_request(
+             AcpClient.handle_request(
                "terminal/output",
                %{"sessionId" => "s1", "terminalId" => terminal_id},
                state
@@ -81,7 +81,7 @@ defmodule Hivebeam.CodexAcpClientTest do
     assert output == "ok"
 
     assert {:ok, %{}, _state} =
-             CodexAcpClient.handle_request(
+             AcpClient.handle_request(
                "terminal/release",
                %{"sessionId" => "s1", "terminalId" => terminal_id},
                state
@@ -92,23 +92,56 @@ defmodule Hivebeam.CodexAcpClientTest do
     tmp_dir = unique_tmp_dir("codex_acp_deny")
 
     assert {:ok, state} =
-             CodexAcpClient.init(
+             AcpClient.init(
                bridge: self(),
                tool_cwd: tmp_dir,
                approval_fun: fn _request, _state -> {:ok, false} end
              )
 
     assert {:error, %{code: -32_003}, state} =
-             CodexAcpClient.handle_request(
+             AcpClient.handle_request(
                "fs/write_text_file",
                %{"sessionId" => "s1", "path" => "blocked.txt", "content" => "x"},
                state
              )
 
     assert {:error, %{code: -32_003}, _state} =
-             CodexAcpClient.handle_request(
+             AcpClient.handle_request(
                "terminal/create",
                %{"sessionId" => "s1", "command" => "/bin/sh", "args" => ["-lc", "echo hi"]},
+               state
+             )
+  end
+
+  test "blocks operations outside sandbox roots even when approvals are allowed" do
+    sandbox_root = unique_tmp_dir("codex_acp_sandbox")
+    outside_root = unique_tmp_dir("codex_acp_outside")
+    outside_file = Path.join(outside_root, "blocked.txt")
+
+    assert {:ok, state} =
+             AcpClient.init(
+               bridge: self(),
+               tool_cwd: sandbox_root,
+               sandbox_roots: [sandbox_root],
+               approval_fun: fn _request, _state -> {:ok, true} end
+             )
+
+    assert {:error, %{code: -32_004}, state} =
+             AcpClient.handle_request(
+               "fs/write_text_file",
+               %{"sessionId" => "s1", "path" => outside_file, "content" => "x"},
+               state
+             )
+
+    assert {:error, %{code: -32_004}, _state} =
+             AcpClient.handle_request(
+               "terminal/create",
+               %{
+                 "sessionId" => "s1",
+                 "command" => "/bin/sh",
+                 "args" => ["-lc", "echo hi"],
+                 "cwd" => outside_root
+               },
                state
              )
   end
@@ -124,26 +157,26 @@ defmodule Hivebeam.CodexAcpClientTest do
     }
 
     assert {:ok, state} =
-             CodexAcpClient.init(
+             AcpClient.init(
                bridge: self(),
                approval_fun: fn _request, _state -> {:ok, true} end
              )
 
     assert {:ok, %{"outcome" => %{"outcome" => "selected", "optionId" => "allow"}}, _state} =
-             CodexAcpClient.handle_request("session/request_permission", request, state)
+             AcpClient.handle_request("session/request_permission", request, state)
   end
 
   test "permission request can return cancelled when approval function errors" do
     request = %{"sessionId" => "s1", "options" => [%{"optionId" => "allow", "name" => "Allow"}]}
 
     assert {:ok, state} =
-             CodexAcpClient.init(
+             AcpClient.init(
                bridge: self(),
                approval_fun: fn _request, _state -> {:error, :approval_service_down} end
              )
 
     assert {:ok, %{"outcome" => %{"outcome" => "cancelled"}}, _state} =
-             CodexAcpClient.handle_request("session/request_permission", request, state)
+             AcpClient.handle_request("session/request_permission", request, state)
   end
 
   defp unique_tmp_dir(prefix) do
