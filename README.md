@@ -63,6 +63,9 @@ Important:
 - `host add` creates `[[hosts]]` entries only (SSH inventory).
 - `node.up` creates `[[nodes]]` entries and starts the remote runtime node.
 - `mix hivebeam chat` targets nodes, not hosts. If you only have `[[hosts]]`, there is nothing remote to chat with yet.
+- If a node already exists in inventory, `mix node.up --name <node>` reuses its configured `host_alias` (no `--remote` needed).
+- `mix node.up --name <node>` now requires an inventory node match (or explicit `--remote`).
+- To run on current machine via inventory, define a host with `ssh="local"` and point nodes to `host_alias="local"`.
 
 ### Remote Quickstart (single host)
 

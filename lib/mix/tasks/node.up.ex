@@ -59,6 +59,9 @@ defmodule Mix.Tasks.Node.Up do
       {:error, {:missing_option, :name}} ->
         Mix.raise("Missing required option --name")
 
+      {:error, {:target_resolution_failed, reason}} ->
+        Mix.raise(reason)
+
       {:error, {:compose_file_missing, path}} ->
         Mix.raise("Compose file not found: #{path}")
 

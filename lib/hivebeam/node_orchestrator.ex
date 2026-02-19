@@ -41,13 +41,61 @@ defmodule Hivebeam.NodeOrchestrator do
 
   @spec up(keyword()) :: {:ok, runtime(), String.t()} | {:error, term()}
   def up(opts) do
-    with {:ok, runtime} <- build_runtime(opts),
+    with :ok <- validate_up_target(opts),
+         {:ok, runtime} <- build_runtime(Keyword.put_new(opts, :hydrate_inventory, true)),
          :ok <- ensure_remote_path(runtime, create_if_missing: true, bootstrap: true),
          :ok <- ensure_local_bind_ip_if_needed(runtime),
          :ok <- ensure_compose_file_if_needed(runtime),
          {:ok, output} <- run_up(runtime) do
       _ = persist_runtime_metadata(runtime)
       {:ok, runtime, output}
+    end
+  end
+
+  defp validate_up_target(opts) do
+    remote_value = normalize_optional_string(Keyword.get(opts, :remote))
+
+    if is_binary(remote_value) do
+      :ok
+    else
+      with {:ok, name} <- required_string(opts, :name) do
+        provider_filter =
+          opts
+          |> Keyword.get(:provider)
+          |> normalize_optional_string()
+          |> case do
+            nil -> nil
+            provider -> String.downcase(provider)
+          end
+
+        matches =
+          Inventory.nodes()
+          |> Enum.filter(fn node ->
+            node["name"] == name and
+              (is_nil(provider_filter) or node["provider"] == provider_filter)
+          end)
+
+        case matches do
+          [] ->
+            {:error,
+             {:target_resolution_failed,
+              "No inventory node named #{name}. Add it first (or pass --remote <host-alias-or-ssh>)."}}
+
+          [_single] ->
+            :ok
+
+          many ->
+            hosts =
+              many
+              |> Enum.map(& &1["host_alias"])
+              |> Enum.uniq()
+              |> Enum.join(", ")
+
+            {:error,
+             {:target_resolution_failed,
+              "Multiple inventory nodes named #{name} (hosts: #{hosts}). Pass --remote <host-alias-or-ssh> to disambiguate."}}
+        end
+      end
     end
   end
 
@@ -90,15 +138,14 @@ defmodule Hivebeam.NodeOrchestrator do
   @spec build_runtime(keyword()) :: {:ok, runtime()} | {:error, term()}
   def build_runtime(opts) do
     cwd = Keyword.get(opts, :cwd, File.cwd!())
+    hydrate_inventory? = Keyword.get(opts, :hydrate_inventory, false)
     hydrate_metadata? = Keyword.get(opts, :hydrate_metadata, false)
 
     with {:ok, name} <- required_string(opts, :name) do
       opts =
-        if hydrate_metadata? do
-          hydrate_opts_from_runtime_metadata(opts, cwd, name)
-        else
-          opts
-        end
+        opts
+        |> maybe_hydrate_inventory(name, hydrate_inventory? or hydrate_metadata?)
+        |> maybe_hydrate_runtime_metadata(cwd, name, hydrate_metadata?)
 
       slot = normalize_slot(Keyword.get(opts, :slot), name)
       provider = normalize_provider(Keyword.get(opts, :provider, @default_provider))
@@ -151,6 +198,14 @@ defmodule Hivebeam.NodeOrchestrator do
       {:ok, runtime}
     end
   end
+
+  defp maybe_hydrate_inventory(opts, _name, false), do: opts
+  defp maybe_hydrate_inventory(opts, name, true), do: hydrate_opts_from_inventory(opts, name)
+
+  defp maybe_hydrate_runtime_metadata(opts, _cwd, _name, false), do: opts
+
+  defp maybe_hydrate_runtime_metadata(opts, cwd, name, true),
+    do: hydrate_opts_from_runtime_metadata(opts, cwd, name)
 
   @spec compose_env(runtime()) :: %{String.t() => String.t()}
   def compose_env(runtime) do
@@ -704,7 +759,11 @@ defmodule Hivebeam.NodeOrchestrator do
 
       case Inventory.find_host(inventory, remote_value) do
         nil ->
-          {remote_value, nil}
+          if remote_value == "local" do
+            {nil, nil}
+          else
+            {remote_value, nil}
+          end
 
         host ->
           resolved_remote =
@@ -712,6 +771,7 @@ defmodule Hivebeam.NodeOrchestrator do
             |> normalize_optional_string()
             |> case do
               nil -> remote_value
+              "local" -> nil
               ssh -> ssh
             end
 
@@ -746,7 +806,13 @@ defmodule Hivebeam.NodeOrchestrator do
     end
   end
 
-  defp normalize_remote_path(nil, cwd, nil, _host_entry), do: cwd
+  defp normalize_remote_path(nil, cwd, nil, host_entry) do
+    if is_map(host_entry) and not is_nil(host_entry["remote_path"]) do
+      normalize_optional_string(host_entry["remote_path"]) || cwd
+    else
+      cwd
+    end
+  end
 
   defp normalize_remote_path(value, cwd, remote, host_entry) do
     case normalize_optional_string(value) do
@@ -769,8 +835,6 @@ defmodule Hivebeam.NodeOrchestrator do
   end
 
   defp hydrate_opts_from_runtime_metadata(opts, cwd, name) do
-    opts = hydrate_opts_from_inventory(opts, name)
-
     {remote, host_entry} = resolve_remote_target(Keyword.get(opts, :remote))
     remote_path = normalize_remote_path(Keyword.get(opts, :remote_path), cwd, remote, host_entry)
 
