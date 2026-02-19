@@ -155,14 +155,71 @@ defmodule Mix.Tasks.Agents.Live do
       {nodes, remote_nodes, %{}}
     else
       discovery = DiscoveryManager.discover(selectors: selectors.raw)
-      include_local? = Keyword.get(opts, :local, false) or discovery.nodes == []
+      inventory = Inventory.load()
+      include_local? = include_local_fallback?(opts, discovery, inventory)
 
       nodes =
         if(include_local?, do: [nil], else: [])
         |> Kernel.++(discovery.nodes)
         |> Enum.uniq()
 
+      validate_discovered_nodes!(nodes, opts, selectors, inventory)
+
       {nodes, discovery.nodes, discovery.node_aliases}
+    end
+  end
+
+  defp include_local_fallback?(opts, discovery, inventory) do
+    local_forced? = Keyword.get(opts, :local, false)
+    local_forced? or (discovery.nodes == [] and inventory_empty?(inventory))
+  end
+
+  defp inventory_empty?(inventory) do
+    Inventory.hosts(inventory) == [] and Inventory.nodes(inventory) == []
+  end
+
+  defp validate_discovered_nodes!(nodes, opts, selectors, inventory) do
+    if nodes == [] and not Keyword.get(opts, :local, false) do
+      selectors_text = Enum.join(selectors.raw, ",")
+      has_hosts? = Inventory.hosts(inventory) != []
+      has_nodes? = Inventory.nodes(inventory) != []
+
+      guidance =
+        cond do
+          has_hosts? and not has_nodes? ->
+            """
+            Inventory has hosts but no managed nodes yet.
+            Start a node first, for example:
+              mix node.up --name edge1 --provider codex --remote <host-alias-or-ssh>
+
+            Then inspect targets:
+              mix hivebeam targets ls --targets all
+            """
+
+          has_nodes? ->
+            """
+            Inventory has nodes, but none matched the selectors.
+            Inspect available targets:
+              mix hivebeam targets ls --targets all
+            """
+
+          true ->
+            """
+            No inventory targets were found.
+            Add a host:
+              mix hivebeam host add --alias <name> --ssh <user@host>
+            Then start a node:
+              mix node.up --name edge1 --provider codex --remote <host-alias-or-ssh>
+            """
+        end
+
+      Mix.raise("""
+      No target nodes matched selectors: #{selectors_text}
+
+      #{guidance}
+
+      Use --local if you explicitly want to chat with the current machine.
+      """)
     end
   end
 

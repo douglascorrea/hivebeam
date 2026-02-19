@@ -259,7 +259,7 @@ defmodule Hivebeam.NodeOrchestrator do
 
   defp ensure_compose_file_if_needed(runtime) do
     path = Path.join(runtime.remote_path, runtime.compose_file)
-    command = "test -f #{shell_escape(path)}"
+    command = "test -f #{shell_path(runtime, path)}"
 
     case System.cmd("ssh", [runtime.remote, command], stderr_to_stdout: true) do
       {_output, 0} ->
@@ -278,9 +278,9 @@ defmodule Hivebeam.NodeOrchestrator do
 
     command =
       if create_if_missing? do
-        "mkdir -p #{shell_escape(runtime.remote_path)}"
+        "mkdir -p #{shell_path(runtime, runtime.remote_path)}"
       else
-        "test -d #{shell_escape(runtime.remote_path)}"
+        "test -d #{shell_path(runtime, runtime.remote_path)}"
       end
 
     case System.cmd("ssh", [runtime.remote, command], stderr_to_stdout: true) do
@@ -305,7 +305,8 @@ defmodule Hivebeam.NodeOrchestrator do
   end
 
   defp bootstrap_remote_runtime(runtime) do
-    mix_check = "test -f #{shell_escape(Path.join(runtime.remote_path, "mix.exs"))}"
+    workspace = remote_source_workspace(runtime)
+    mix_check = "test -f #{shell_path(runtime, Path.join(workspace, "mix.exs"))}"
 
     case System.cmd("ssh", [runtime.remote, mix_check], stderr_to_stdout: true) do
       {_output, 0} ->
@@ -320,7 +321,7 @@ defmodule Hivebeam.NodeOrchestrator do
 
           repo_url ->
             clone_command =
-              "if [ -z \"$(ls -A #{shell_escape(runtime.remote_path)} 2>/dev/null)\" ]; then git clone --depth 1 #{shell_escape(repo_url)} #{shell_escape(runtime.remote_path)}; fi"
+              "mkdir -p #{shell_path(runtime, Path.dirname(workspace))} && if [ ! -f #{shell_path(runtime, Path.join(workspace, "mix.exs"))} ]; then rm -rf #{shell_path(runtime, workspace)} && git clone --depth 1 #{shell_escape(repo_url)} #{shell_path(runtime, workspace)}; fi"
 
             case System.cmd("ssh", [runtime.remote, clone_command], stderr_to_stdout: true) do
               {_clone_output, 0} ->
@@ -331,13 +332,13 @@ defmodule Hivebeam.NodeOrchestrator do
                   {output, _} ->
                     {:error,
                      {:remote_bootstrap_failed,
-                      "Remote path #{runtime.remote_path} exists but does not contain a Hivebeam checkout. #{String.trim(output)}"}}
+                      "Remote path #{runtime.remote_path} bootstrap workspace is missing a Hivebeam checkout. #{String.trim(output)}"}}
                 end
 
               {output, _code} ->
                 {:error,
                  {:remote_bootstrap_failed,
-                  "Could not bootstrap #{runtime.remote_path} on #{runtime.remote}. #{String.trim(output)}"}}
+                  "Could not bootstrap source workspace under #{runtime.remote_path} on #{runtime.remote}. #{String.trim(output)}"}}
             end
         end
     end
@@ -462,17 +463,24 @@ defmodule Hivebeam.NodeOrchestrator do
 
     bridge_task = bridge_mix_task(runtime.provider)
 
+    workspace_prefix =
+      if runtime.remote do
+        "cd #{shell_path(runtime, remote_source_workspace(runtime))} && "
+      else
+        ""
+      end
+
     run =
-      "mix deps.get && mix compile && ERL_AFLAGS=#{shell_escape(erl_aflags)} exec mix #{shell_escape(bridge_task)}"
+      "#{workspace_prefix}mix deps.get && mix compile && ERL_AFLAGS=#{shell_escape(erl_aflags)} exec mix #{shell_escape(bridge_task)}"
 
     """
-    mkdir -p #{shell_escape(Path.dirname(runtime.pid_file))} &&
-    if [ -f #{shell_escape(runtime.pid_file)} ] && kill -0 "$(cat #{shell_escape(runtime.pid_file)})" 2>/dev/null; then
-      echo "already_running=$(cat #{shell_escape(runtime.pid_file)})";
+    mkdir -p #{shell_path(runtime, Path.dirname(runtime.pid_file))} &&
+    if [ -f #{shell_path(runtime, runtime.pid_file)} ] && kill -0 "$(cat #{shell_path(runtime, runtime.pid_file)})" 2>/dev/null; then
+      echo "already_running=$(cat #{shell_path(runtime, runtime.pid_file)})";
     else
-      nohup sh -lc #{shell_escape(run)} >> #{shell_escape(runtime.log_file)} 2>&1 &
-      echo $! > #{shell_escape(runtime.pid_file)};
-      echo "started=$(cat #{shell_escape(runtime.pid_file)})";
+      nohup sh -lc #{shell_escape(run)} >> #{shell_path(runtime, runtime.log_file)} 2>&1 &
+      echo $! > #{shell_path(runtime, runtime.pid_file)};
+      echo "started=$(cat #{shell_path(runtime, runtime.pid_file)})";
     fi
     """
     |> String.replace("\n", " ")
@@ -480,14 +488,14 @@ defmodule Hivebeam.NodeOrchestrator do
 
   defp native_down_shell(runtime) do
     """
-    if [ -f #{shell_escape(runtime.pid_file)} ]; then
-      pid="$(cat #{shell_escape(runtime.pid_file)})";
+    if [ -f #{shell_path(runtime, runtime.pid_file)} ]; then
+      pid="$(cat #{shell_path(runtime, runtime.pid_file)})";
       if kill -0 "$pid" 2>/dev/null; then
         kill "$pid" 2>/dev/null || true;
         sleep 1;
         kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true;
       fi;
-      rm -f #{shell_escape(runtime.pid_file)};
+      rm -f #{shell_path(runtime, runtime.pid_file)};
       echo "stopped=$pid";
     else
       echo "stopped=none";
@@ -498,8 +506,8 @@ defmodule Hivebeam.NodeOrchestrator do
 
   defp native_status_shell(runtime) do
     """
-    if [ -f #{shell_escape(runtime.pid_file)} ]; then
-      pid="$(cat #{shell_escape(runtime.pid_file)})";
+    if [ -f #{shell_path(runtime, runtime.pid_file)} ]; then
+      pid="$(cat #{shell_path(runtime, runtime.pid_file)})";
       if kill -0 "$pid" 2>/dev/null; then
         echo "status=running";
       else
@@ -517,7 +525,7 @@ defmodule Hivebeam.NodeOrchestrator do
     runtime_dir = Path.dirname(runtime.pid_file)
 
     """
-    dir=#{shell_escape(runtime_dir)};
+    dir=#{shell_path(runtime, runtime_dir)};
     if [ -d "$dir" ]; then
       for file in "$dir"/*.pid; do
         [ -e "$file" ] || continue;
@@ -605,7 +613,7 @@ defmodule Hivebeam.NodeOrchestrator do
 
   defp render_shell_command(runtime, command, env_map) do
     env_prefix = render_env_prefix(env_map)
-    "cd #{shell_escape(runtime.remote_path)} && #{env_prefix}#{command}"
+    "cd #{shell_path(runtime, runtime.remote_path)} && #{env_prefix}#{command}"
   end
 
   defp run_remote_command(runtime, command) do
@@ -636,6 +644,35 @@ defmodule Hivebeam.NodeOrchestrator do
       |> String.replace("'", "'\"'\"'")
 
     "'#{escaped}'"
+  end
+
+  defp shell_path(runtime, path) do
+    if runtime.remote do
+      remote_shell_path(path)
+    else
+      shell_escape(path)
+    end
+  end
+
+  defp remote_shell_path(path) do
+    value = to_string(path)
+
+    cond do
+      value == "~" ->
+        "$HOME"
+
+      String.starts_with?(value, "~/") ->
+        rest = String.trim_leading(value, "~/")
+
+        if rest == "" do
+          "$HOME"
+        else
+          "$HOME/#{shell_escape(rest)}"
+        end
+
+      true ->
+        shell_escape(value)
+    end
   end
 
   defp required_string(opts, key) do
@@ -683,6 +720,10 @@ defmodule Hivebeam.NodeOrchestrator do
     end
   end
 
+  defp remote_source_workspace(runtime) do
+    Path.join(runtime.remote_path, ".hivebeam/source")
+  end
+
   defp normalize_provider(nil), do: @default_provider
 
   defp normalize_provider(value) do
@@ -728,6 +769,8 @@ defmodule Hivebeam.NodeOrchestrator do
   end
 
   defp hydrate_opts_from_runtime_metadata(opts, cwd, name) do
+    opts = hydrate_opts_from_inventory(opts, name)
+
     {remote, host_entry} = resolve_remote_target(Keyword.get(opts, :remote))
     remote_path = normalize_remote_path(Keyword.get(opts, :remote_path), cwd, remote, host_entry)
 
@@ -751,6 +794,66 @@ defmodule Hivebeam.NodeOrchestrator do
     end
   end
 
+  defp hydrate_opts_from_inventory(opts, name) do
+    inventory = Inventory.load()
+    remote_lookup = normalize_optional_string(Keyword.get(opts, :remote))
+
+    provider_lookup =
+      opts
+      |> Keyword.get(:provider)
+      |> normalize_optional_string()
+      |> case do
+        nil -> nil
+        value -> String.downcase(value)
+      end
+
+    expected_host_alias =
+      case remote_lookup do
+        nil ->
+          nil
+
+        value ->
+          case Inventory.find_host(inventory, value) do
+            nil -> value
+            host -> host["alias"]
+          end
+      end
+
+    candidates =
+      inventory
+      |> Inventory.nodes()
+      |> Enum.filter(fn node ->
+        node["name"] == name and
+          (is_nil(provider_lookup) or node["provider"] == provider_lookup) and
+          (is_nil(expected_host_alias) or node["host_alias"] == expected_host_alias)
+      end)
+
+    case candidates do
+      [node] ->
+        host_alias = normalize_optional_string(node["host_alias"])
+        host = if is_binary(host_alias), do: Inventory.find_host(inventory, host_alias), else: nil
+
+        opts
+        |> put_opt_if_missing(:provider, node["provider"])
+        |> put_opt_if_missing(:docker, node["mode"] == "docker")
+        |> put_opt_if_missing(:remote, host_alias)
+        |> put_opt_if_missing(:remote_path, if(is_map(host), do: host["remote_path"], else: nil))
+
+      _ ->
+        opts
+    end
+  end
+
+  defp put_opt_if_missing(opts, _key, nil), do: opts
+
+  defp put_opt_if_missing(opts, key, value) do
+    if Keyword.has_key?(opts, key) do
+      opts
+    else
+      Keyword.put(opts, key, value)
+    end
+  end
+
   defp put_opt_if_missing_from_meta(opts, key, meta, meta_key) do
     if Keyword.has_key?(opts, key) do
       opts
@@ -769,7 +872,7 @@ defmodule Hivebeam.NodeOrchestrator do
       if is_nil(remote) do
         if File.exists?(path), do: File.read(path), else: :error
       else
-        command = "if [ -f #{shell_escape(path)} ]; then cat #{shell_escape(path)}; fi"
+        command = "if [ -f #{remote_shell_path(path)} ]; then cat #{remote_shell_path(path)}; fi"
 
         case System.cmd("ssh", [remote, command], stderr_to_stdout: true) do
           {output, 0} -> {:ok, output}
@@ -816,7 +919,7 @@ defmodule Hivebeam.NodeOrchestrator do
 
   defp persist_runtime_metadata_json(runtime, encoded) do
     command =
-      "mkdir -p #{shell_escape(Path.dirname(runtime.meta_file))} && printf %s #{shell_escape(encoded)} > #{shell_escape(runtime.meta_file)}"
+      "mkdir -p #{shell_path(runtime, Path.dirname(runtime.meta_file))} && printf %s #{shell_escape(encoded)} > #{shell_path(runtime, runtime.meta_file)}"
 
     if runtime.remote do
       case run_remote_command(runtime, "sh -lc #{shell_escape(command)}") do

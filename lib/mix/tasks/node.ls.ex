@@ -1,6 +1,7 @@
 defmodule Mix.Tasks.Node.Ls do
   use Mix.Task
 
+  alias Hivebeam.Inventory
   alias Hivebeam.NodeOrchestrator
 
   @shortdoc "Lists Hivebeam nodes or inspects one named node (native by default, --docker optional)"
@@ -50,6 +51,14 @@ defmodule Mix.Tasks.Node.Ls do
         end
 
       {:ok, %{runtime: runtime, running: running, services: services}} ->
+        state = if(running, do: "up", else: "down")
+
+        inventory =
+          Inventory.load()
+          |> Inventory.update_runtime_state(runtime, state)
+
+        _ = Inventory.save(inventory)
+
         mode = if(runtime.docker, do: "docker", else: "native")
         Mix.shell().info("Project: #{runtime.project_name}")
         Mix.shell().info("  mode: #{mode}")
@@ -76,6 +85,19 @@ defmodule Mix.Tasks.Node.Ls do
         end
 
       {:ok, %{runtime: runtime, running: running, status: status, pid: pid}} ->
+        state =
+          case status do
+            "running" -> "up"
+            "stopped" -> "down"
+            _ -> "degraded"
+          end
+
+        inventory =
+          Inventory.load()
+          |> Inventory.update_runtime_state(runtime, state)
+
+        _ = Inventory.save(inventory)
+
         mode = if(runtime.docker, do: "docker", else: "native")
         Mix.shell().info("Project: #{runtime.project_name}")
         Mix.shell().info("  mode: #{mode}")

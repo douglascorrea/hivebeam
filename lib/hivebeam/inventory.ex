@@ -102,12 +102,56 @@ defmodule Hivebeam.Inventory do
       "mode" => if(runtime.docker, do: "docker", else: "native"),
       "managed" => true,
       "node_name" => to_string(runtime.node_name),
-      "state" => "up",
-      "remote" => runtime.remote || "",
-      "remote_path" => runtime.remote_path
+      "state" => "up"
     }
 
     upsert_node(node, inventory)
+  end
+
+  @spec update_runtime_state(map(), String.t(), inventory() | nil) :: inventory()
+  @spec update_runtime_state(inventory(), map(), String.t()) :: inventory()
+  def update_runtime_state(first, second, third \\ nil)
+
+  def update_runtime_state(runtime, state, inventory)
+      when is_map(runtime) and is_binary(state) do
+    do_update_runtime_state(runtime, state, inventory || load())
+  end
+
+  def update_runtime_state(inventory, runtime, state)
+      when is_map(inventory) and is_map(runtime) and is_binary(state) do
+    do_update_runtime_state(runtime, state, inventory)
+  end
+
+  defp do_update_runtime_state(runtime, state, inventory) do
+    inventory = inventory || load()
+
+    name = runtime_value(runtime, :name, "name")
+    provider = runtime_value(runtime, :provider, "provider")
+
+    host_alias =
+      case runtime_value(runtime, :remote, "remote") do
+        nil ->
+          "local"
+
+        remote ->
+          host_alias_for_remote(remote, inventory) || host_alias_from_remote(remote)
+      end
+
+    state = normalize_string(state, "down")
+
+    nodes =
+      inventory
+      |> Map.get("nodes", [])
+      |> Enum.map(fn node ->
+        if node["name"] == name and node["host_alias"] == host_alias and
+             node["provider"] == provider do
+          Map.put(node, "state", state)
+        else
+          node
+        end
+      end)
+
+    Map.put(inventory, "nodes", nodes)
   end
 
   @spec hosts(inventory() | nil) :: [host_entry()]
@@ -263,13 +307,7 @@ defmodule Hivebeam.Inventory do
       "mode" => normalize_string(Map.get(node, "mode"), "native"),
       "managed" => normalize_bool(Map.get(node, "managed"), true),
       "node_name" => normalize_string(Map.get(node, "node_name"), ""),
-      "state" => normalize_string(Map.get(node, "state"), "up"),
-      "remote" => normalize_string(Map.get(node, "remote"), ""),
-      "remote_path" =>
-        normalize_string(
-          Map.get(node, "remote_path"),
-          ConfigStore.default_remote_path()
-        )
+      "state" => normalize_string(Map.get(node, "state"), "up")
     }
   end
 
@@ -308,6 +346,16 @@ defmodule Hivebeam.Inventory do
   end
 
   defp normalize_tags(_), do: []
+
+  defp runtime_value(runtime, atom_key, string_key) do
+    runtime
+    |> Map.get(atom_key, Map.get(runtime, string_key))
+    |> normalize_string("")
+    |> case do
+      "" -> nil
+      value -> value
+    end
+  end
 
   defp empty_inventory do
     %{"hosts" => [], "nodes" => []}

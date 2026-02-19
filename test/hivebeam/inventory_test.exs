@@ -83,7 +83,29 @@ defmodule Hivebeam.InventoryTest do
     assert Enum.any?(loaded["hosts"], fn host -> host["ssh"] == "user@remote-host" end)
 
     assert Enum.any?(loaded["nodes"], fn node ->
-             node["name"] == "edge2" and node["provider"] == "claude"
+             node["name"] == "edge2" and node["provider"] == "claude" and
+               node["host_alias"] == "remote-host" and not Map.has_key?(node, "remote") and
+               not Map.has_key?(node, "remote_path")
            end)
+  end
+
+  test "update_runtime_state changes node state for managed runtime entry" do
+    runtime = %{
+      name: "edge3",
+      provider: "codex",
+      docker: false,
+      remote: "user@remote-host",
+      remote_path: "~/.local/hivebeam/current",
+      node_name: "codex@remote-host"
+    }
+
+    inventory =
+      runtime
+      |> Inventory.record_runtime()
+      |> Inventory.update_runtime_state(runtime, "down")
+
+    assert :ok = Inventory.save(inventory)
+
+    assert [%{"state" => "down"}] = Inventory.select_nodes(["host:remote-host", "provider:codex"])
   end
 end

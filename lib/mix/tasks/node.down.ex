@@ -1,6 +1,7 @@
 defmodule Mix.Tasks.Node.Down do
   use Mix.Task
 
+  alias Hivebeam.Inventory
   alias Hivebeam.NodeOrchestrator
 
   @shortdoc "Stops a named Hivebeam node locally or over SSH (native by default, --docker optional)"
@@ -30,6 +31,12 @@ defmodule Mix.Tasks.Node.Down do
 
     case NodeOrchestrator.down(opts) do
       {:ok, runtime, output} ->
+        inventory =
+          Inventory.load()
+          |> Inventory.update_runtime_state(runtime, "down")
+
+        _ = Inventory.save(inventory)
+
         mode = if(runtime.docker, do: "docker", else: "native")
         Mix.shell().info("Stopped #{runtime.project_name} (mode=#{mode})")
         trimmed = String.trim(output)
