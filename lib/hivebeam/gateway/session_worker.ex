@@ -368,31 +368,39 @@ defmodule Hivebeam.Gateway.SessionWorker do
   end
 
   defp sync_bridge_status(state) do
-    case state.bridge_module.status(state.bridge_name) do
-      {:ok, status} ->
-        connected = status.connected == true
-        upstream_session_id = status.session_id
-        in_flight = status.in_flight_prompt == true or not is_nil(state.in_flight)
+    if status_poll_blocked?(state) do
+      state
+    else
+      case state.bridge_module.status(state.bridge_name) do
+        {:ok, status} ->
+          connected = status.connected == true
+          upstream_session_id = status.session_id
+          in_flight = status.in_flight_prompt == true or not is_nil(state.in_flight)
 
-        state =
+          state =
+            state
+            |> maybe_emit_connection_events(connected, upstream_session_id)
+            |> persist_session(%{
+              status: if(connected, do: "connected", else: "degraded"),
+              connected: connected,
+              in_flight: in_flight,
+              upstream_session_id: upstream_session_id,
+              approval_mode: Map.get(status, :approval_mode, state.approval_mode)
+            })
+
+          %{state | connected: connected, upstream_session_id: upstream_session_id}
+
+        {:error, reason} ->
           state
-          |> maybe_emit_connection_events(connected, upstream_session_id)
-          |> persist_session(%{
-            status: if(connected, do: "connected", else: "degraded"),
-            connected: connected,
-            in_flight: in_flight,
-            upstream_session_id: upstream_session_id,
-            approval_mode: Map.get(status, :approval_mode, state.approval_mode)
-          })
-
-        %{state | connected: connected, upstream_session_id: upstream_session_id}
-
-      {:error, reason} ->
-        state
-        |> append_and_broadcast("upstream_status_error", "gateway", %{reason: inspect(reason)})
-        |> persist_session(%{status: "degraded", connected: false})
-        |> Map.put(:connected, false)
+          |> append_and_broadcast("upstream_status_error", "gateway", %{reason: inspect(reason)})
+          |> persist_session(%{status: "degraded", connected: false})
+          |> Map.put(:connected, false)
+      end
     end
+  end
+
+  defp status_poll_blocked?(state) do
+    not is_nil(state.in_flight) or map_size(state.pending_approvals) > 0
   end
 
   defp maybe_emit_connection_events(state, connected, upstream_session_id) do

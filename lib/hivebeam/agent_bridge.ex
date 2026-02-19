@@ -87,7 +87,8 @@ defmodule Hivebeam.AgentBridge do
       reconnect_timer_ref: nil,
       tool_cwd: Map.get(config, :tool_cwd, File.cwd!()),
       default_approval_mode: default_approval_mode,
-      approval_timeout_ms: Map.get(config, :approval_timeout_ms, @default_approval_timeout_ms)
+      approval_timeout_ms: Map.get(config, :approval_timeout_ms, @default_approval_timeout_ms),
+      enforced_provider_mode: nil
     }
 
     {:ok, state, {:continue, :connect}}
@@ -113,7 +114,8 @@ defmodule Hivebeam.AgentBridge do
       in_flight_prompt: not is_nil(state.in_flight_prompt),
       last_error: state.last_error,
       last_prompt_result: state.last_prompt_result,
-      approval_mode: current_approval_mode(state)
+      approval_mode: current_approval_mode(state),
+      enforced_provider_mode: state.enforced_provider_mode
     }
 
     {:reply, {:ok, response}, state}
@@ -441,11 +443,11 @@ defmodule Hivebeam.AgentBridge do
     case start_result do
       {:ok, conn_pid} ->
         case bootstrap_session(state, conn_pid) do
-          {:ok, session_id} ->
+          {:ok, %{session_id: session_id, enforced_provider_mode: enforced_provider_mode}} ->
             monitor_ref = Process.monitor(conn_pid)
 
             Logger.info(
-              "#{provider_title(state.acp_provider)} bridge connected on #{Node.self()} with session #{session_id} via #{state.agent_path}"
+              "#{provider_title(state.acp_provider)} bridge connected on #{Node.self()} with session #{session_id} via #{state.agent_path} (mode=#{enforced_provider_mode})"
             )
 
             %{
@@ -455,6 +457,7 @@ defmodule Hivebeam.AgentBridge do
                 session_id: session_id,
                 status: :connected,
                 last_error: nil,
+                enforced_provider_mode: enforced_provider_mode,
                 reconnect_timer_ref: cancel_retry_timer(state.reconnect_timer_ref)
             }
 
@@ -494,6 +497,8 @@ defmodule Hivebeam.AgentBridge do
       }
     }
 
+    session_new_payload = session_new_payload(state)
+
     with %{"result" => _init_result} <-
            request(state, conn_pid, "initialize", initialize_payload, state.connect_timeout_ms),
          %{"result" => session_result} when is_map(session_result) <-
@@ -501,14 +506,17 @@ defmodule Hivebeam.AgentBridge do
              state,
              conn_pid,
              "session/new",
-             %{"cwd" => File.cwd!(), "mcpServers" => []},
+             session_new_payload,
              state.connect_timeout_ms
            ),
          session_id when is_binary(session_id) and session_id != "" <-
-           session_result["sessionId"] || session_result["session_id"] do
-      {:ok, session_id}
+           session_result["sessionId"] || session_result["session_id"],
+         {:ok, enforced_provider_mode} <-
+           enforce_provider_mode(state, conn_pid, session_id, session_result) do
+      {:ok, %{session_id: session_id, enforced_provider_mode: enforced_provider_mode}}
     else
       %{"error" => error} -> {:error, {:bootstrap_error, error}}
+      {:error, reason} -> {:error, reason}
       nil -> {:error, :missing_session_id}
       other -> {:error, {:unexpected_bootstrap_response, other}}
     end
@@ -528,9 +536,89 @@ defmodule Hivebeam.AgentBridge do
         conn_monitor_ref: nil,
         session_id: nil,
         status: :degraded,
-        last_error: reason
+        last_error: reason,
+        enforced_provider_mode: nil
     }
   end
+
+  defp session_new_payload(state) do
+    payload = %{"cwd" => state.tool_cwd, "mcpServers" => []}
+
+    case state.acp_provider do
+      "claude" ->
+        Map.put(payload, "_meta", %{
+          "claudeCode" => %{
+            "options" => %{
+              "settingSources" => ["project"]
+            }
+          }
+        })
+
+      _ ->
+        payload
+    end
+  end
+
+  defp provider_mode_for_approval("codex", :allow), do: "full-access"
+  defp provider_mode_for_approval("codex", _), do: "read-only"
+
+  defp provider_mode_for_approval("claude", :allow), do: "bypassPermissions"
+  defp provider_mode_for_approval("claude", :deny), do: "dontAsk"
+  defp provider_mode_for_approval("claude", :ask), do: "default"
+
+  defp provider_mode_for_approval(_provider, :allow), do: "full-access"
+  defp provider_mode_for_approval(_provider, _approval_mode), do: "read-only"
+
+  defp enforce_provider_mode(state, conn_pid, session_id, session_result) do
+    desired_mode = provider_mode_for_approval(state.acp_provider, state.default_approval_mode)
+
+    with :ok <- ensure_mode_available(desired_mode, available_mode_ids(session_result)),
+         %{"result" => _mode_result} <-
+           request(
+             state,
+             conn_pid,
+             "session/set_mode",
+             %{"sessionId" => session_id, "modeId" => desired_mode},
+             state.connect_timeout_ms
+           ) do
+      {:ok, desired_mode}
+    else
+      {:error, reason} ->
+        {:error, reason}
+
+      %{"error" => error} ->
+        {:error, {:mode_enforcement_failed, error}}
+
+      other ->
+        {:error, {:mode_enforcement_failed, {:unexpected_response, other}}}
+    end
+  end
+
+  defp available_mode_ids(session_result) when is_map(session_result) do
+    session_result
+    |> get_in(["modes", "availableModes"])
+    |> List.wrap()
+    |> Enum.reduce([], fn mode, acc ->
+      case mode_id(mode) do
+        nil -> acc
+        id -> [id | acc]
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp ensure_mode_available(mode_id, available_mode_ids)
+       when is_binary(mode_id) and is_list(available_mode_ids) do
+    if mode_id in available_mode_ids do
+      :ok
+    else
+      {:error, {:mode_unavailable, mode_id, available_mode_ids}}
+    end
+  end
+
+  defp mode_id(%{"id" => id}) when is_binary(id) and id != "", do: id
+  defp mode_id(%{id: id}) when is_binary(id) and id != "", do: id
+  defp mode_id(_), do: nil
 
   defp maybe_reply_prompt_error(state, reason) do
     case state.in_flight_prompt do

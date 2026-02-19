@@ -67,7 +67,24 @@ defmodule Hivebeam.Test.FakeConnection do
 
   def send_request(_conn_pid, "session/new", params, _timeout) do
     Hivebeam.Test.FakeAcpStore.add_call({:session_new, params})
-    %{"result" => %{"sessionId" => "session-test"}}
+
+    %{
+      "result" => %{
+        "sessionId" => "session-test",
+        "modes" => %{
+          "availableModes" => [
+            %{"id" => "read-only"},
+            %{"id" => "auto"},
+            %{"id" => "full-access"}
+          ]
+        }
+      }
+    }
+  end
+
+  def send_request(_conn_pid, "session/set_mode", params, _timeout) do
+    Hivebeam.Test.FakeAcpStore.add_call({:session_set_mode, params})
+    %{"result" => %{}}
   end
 
   def send_request(_conn_pid, "session/prompt", params, _timeout) do
@@ -124,7 +141,24 @@ defmodule Hivebeam.Test.FakeBlockingConnection do
 
   def send_request(_conn_pid, "session/new", params, _timeout) do
     Hivebeam.Test.FakeAcpStore.add_call({:session_new, params})
-    %{"result" => %{"sessionId" => "session-test"}}
+
+    %{
+      "result" => %{
+        "sessionId" => "session-test",
+        "modes" => %{
+          "availableModes" => [
+            %{"id" => "read-only"},
+            %{"id" => "auto"},
+            %{"id" => "full-access"}
+          ]
+        }
+      }
+    }
+  end
+
+  def send_request(_conn_pid, "session/set_mode", params, _timeout) do
+    Hivebeam.Test.FakeAcpStore.add_call({:session_set_mode, params})
+    %{"result" => %{}}
   end
 
   def send_request(_conn_pid, "session/prompt", params, _timeout) do
@@ -156,6 +190,45 @@ defmodule Hivebeam.Test.FakeBlockingConnection do
   end
 end
 
+defmodule Hivebeam.Test.FakeModeApplyErrorConnection do
+  def send_request(_conn_pid, "initialize", params, _timeout) do
+    Hivebeam.Test.FakeAcpStore.add_call({:initialize, params})
+    %{"result" => %{"protocolVersion" => 1}}
+  end
+
+  def send_request(_conn_pid, "session/new", params, _timeout) do
+    Hivebeam.Test.FakeAcpStore.add_call({:session_new, params})
+
+    %{
+      "result" => %{
+        "sessionId" => "session-test",
+        "modes" => %{
+          "availableModes" => [
+            %{"id" => "read-only"},
+            %{"id" => "auto"},
+            %{"id" => "full-access"}
+          ]
+        }
+      }
+    }
+  end
+
+  def send_request(_conn_pid, "session/set_mode", params, _timeout) do
+    Hivebeam.Test.FakeAcpStore.add_call({:session_set_mode, params})
+    %{"error" => %{"code" => -32000, "message" => "mode apply failed"}}
+  end
+
+  def send_request(_conn_pid, method, params, _timeout) do
+    Hivebeam.Test.FakeAcpStore.add_call({method, params})
+    %{"error" => %{"code" => -32000, "message" => "unexpected method"}}
+  end
+
+  def send_notification(_conn_pid, method, params) do
+    Hivebeam.Test.FakeAcpStore.add_call({method, params})
+    :ok
+  end
+end
+
 defmodule Hivebeam.CodexBridgeTest do
   use ExUnit.Case, async: false
 
@@ -171,15 +244,18 @@ defmodule Hivebeam.CodexBridgeTest do
     :ok
   end
 
-  test "connects and reports connected status" do
+  test "connects with read-only enforcement and reports connected status" do
     bridge_name = :"codex_bridge_#{System.unique_integer([:positive])}"
+    tool_cwd = Path.join(System.tmp_dir!(), "hivebeam_codex_bridge_tool_cwd")
+
+    File.mkdir_p!(tool_cwd)
 
     {:ok, bridge_pid} =
       CodexBridge.start_link(
         name: bridge_name,
         acpex_module: Hivebeam.Test.FakeACPex,
         connection_module: Hivebeam.Test.FakeConnection,
-        config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20}
+        config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20, tool_cwd: tool_cwd}
       )
 
     on_exit(fn -> safe_stop(bridge_pid) end)
@@ -192,6 +268,7 @@ defmodule Hivebeam.CodexBridgeTest do
     {:ok, status} = CodexBridge.status(bridge_name)
     assert status.status == :connected
     assert status.session_id == "session-test"
+    assert status.enforced_provider_mode == "read-only"
 
     assert {:initialize, initialize_payload} =
              Enum.find(Hivebeam.Test.FakeAcpStore.calls(), fn {kind, _} ->
@@ -200,6 +277,72 @@ defmodule Hivebeam.CodexBridgeTest do
 
     assert get_in(initialize_payload, ["clientCapabilities", "fs", "readTextFile"]) == true
     assert get_in(initialize_payload, ["clientCapabilities", "terminal"]) == true
+
+    assert {:session_new, session_new_payload} =
+             Enum.find(Hivebeam.Test.FakeAcpStore.calls(), fn
+               {:session_new, _params} -> true
+               _ -> false
+             end)
+
+    assert session_new_payload["cwd"] == tool_cwd
+
+    assert {:session_set_mode, %{"modeId" => "read-only"}} =
+             Enum.find(Hivebeam.Test.FakeAcpStore.calls(), fn
+               {:session_set_mode, _params} -> true
+               _ -> false
+             end)
+  end
+
+  test "enforces full-access mode when approval mode is allow" do
+    bridge_name = :"codex_bridge_#{System.unique_integer([:positive])}"
+
+    {:ok, bridge_pid} =
+      CodexBridge.start_link(
+        name: bridge_name,
+        acpex_module: Hivebeam.Test.FakeACPex,
+        connection_module: Hivebeam.Test.FakeConnection,
+        config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20, approval_mode: :allow}
+      )
+
+    on_exit(fn -> safe_stop(bridge_pid) end)
+
+    wait_until(fn ->
+      {:ok, status} = CodexBridge.status(bridge_name)
+      status.connected
+    end)
+
+    {:ok, status} = CodexBridge.status(bridge_name)
+    assert status.enforced_provider_mode == "full-access"
+
+    assert {:session_set_mode, %{"modeId" => "full-access"}} =
+             Enum.find(Hivebeam.Test.FakeAcpStore.calls(), fn
+               {:session_set_mode, _params} -> true
+               _ -> false
+             end)
+  end
+
+  test "degrades bridge when provider mode enforcement fails" do
+    bridge_name = :"codex_bridge_#{System.unique_integer([:positive])}"
+
+    {:ok, bridge_pid} =
+      CodexBridge.start_link(
+        name: bridge_name,
+        acpex_module: Hivebeam.Test.FakeACPex,
+        connection_module: Hivebeam.Test.FakeModeApplyErrorConnection,
+        config: %{acp_command: {"fake-acp", []}, reconnect_ms: 20}
+      )
+
+    on_exit(fn -> safe_stop(bridge_pid) end)
+
+    wait_until(fn ->
+      {:ok, status} = CodexBridge.status(bridge_name)
+      status.status == :degraded
+    end)
+
+    {:ok, status} = CodexBridge.status(bridge_name)
+    refute status.connected
+
+    assert {:mode_enforcement_failed, %{"message" => "mode apply failed"}} = status.last_error
   end
 
   test "collects prompt updates, streams updates, and normalizes stop reason" do

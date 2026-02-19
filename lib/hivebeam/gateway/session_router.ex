@@ -8,6 +8,7 @@ defmodule Hivebeam.Gateway.SessionRouter do
 
   @worker_registry Hivebeam.Gateway.WorkerRegistry
   @event_registry Hivebeam.Gateway.EventRegistry
+  @worker_call_timeout_ms 30_000
 
   @spec create_session(map()) :: {:ok, map()} | {:error, term()}
   def create_session(attrs \\ %{}) when is_map(attrs) do
@@ -74,7 +75,7 @@ defmodule Hivebeam.Gateway.SessionRouter do
     with {:ok, _session} <- Store.get_session(gateway_session_key),
          {:ok, pid} <- ensure_worker(gateway_session_key, recovered?: true) do
       timeout_ms = normalize_timeout(timeout_ms)
-      GenServer.call(pid, {:prompt, request_id, text, timeout_ms}, timeout_ms + 5_000)
+      safe_worker_call(pid, {:prompt, request_id, text, timeout_ms}, timeout_ms + 5_000)
     end
   end
 
@@ -82,7 +83,7 @@ defmodule Hivebeam.Gateway.SessionRouter do
   def cancel(gateway_session_key) when is_binary(gateway_session_key) do
     with {:ok, _session} <- Store.get_session(gateway_session_key),
          {:ok, pid} <- ensure_worker(gateway_session_key, recovered?: true) do
-      GenServer.call(pid, :cancel)
+      safe_worker_call(pid, :cancel, @worker_call_timeout_ms)
     end
   end
 
@@ -91,7 +92,7 @@ defmodule Hivebeam.Gateway.SessionRouter do
       when is_binary(gateway_session_key) and is_binary(approval_ref) and is_binary(decision) do
     with {:ok, _session} <- Store.get_session(gateway_session_key),
          {:ok, pid} <- ensure_worker(gateway_session_key, recovered?: true) do
-      GenServer.call(pid, {:approve, approval_ref, decision})
+      safe_worker_call(pid, {:approve, approval_ref, decision}, @worker_call_timeout_ms)
     end
   end
 
@@ -99,7 +100,7 @@ defmodule Hivebeam.Gateway.SessionRouter do
   def close(gateway_session_key) when is_binary(gateway_session_key) do
     with {:ok, _session} <- Store.get_session(gateway_session_key),
          {:ok, pid} <- ensure_worker(gateway_session_key, recovered?: true) do
-      _ = GenServer.call(pid, :close)
+      _ = safe_worker_call(pid, :close, @worker_call_timeout_ms)
       _ = EventLog.append(gateway_session_key, "session_closed", "gateway", %{})
       Store.close_session(gateway_session_key)
     end
@@ -250,6 +251,15 @@ defmodule Hivebeam.Gateway.SessionRouter do
 
   defp maybe_put_bridge_module(opts, module) when is_atom(module),
     do: Keyword.put(opts, :bridge_module, module)
+
+  defp safe_worker_call(pid, message, timeout_ms) when is_pid(pid) and is_integer(timeout_ms) do
+    try do
+      GenServer.call(pid, message, timeout_ms)
+    catch
+      :exit, reason ->
+        {:error, {:worker_call_exit, reason}}
+    end
+  end
 
   defp now_iso do
     DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()

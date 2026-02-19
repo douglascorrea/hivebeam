@@ -53,6 +53,14 @@ Session creation accepts `provider` and routes each session to the corresponding
 - `provider=codex` -> `Hivebeam.CodexBridge`
 - `provider=claude` -> `Hivebeam.ClaudeBridge`
 
+## Permission enforcement
+
+Gateway `approval_mode` is authoritative for gateway-created sessions.
+
+- Gateway enforces provider session mode during ACP bootstrap (`session/set_mode`) instead of inheriting machine runtime permission defaults.
+- `provider=claude` sessions are created with project-only settings sources (`settingSources=["project"]`) to avoid user/local machine permission policy inheritance.
+- Session startup fails fast and remains degraded if permission-mode enforcement cannot be applied.
+
 ## Configuration
 
 Gateway:

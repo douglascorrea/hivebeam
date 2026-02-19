@@ -67,7 +67,26 @@ defmodule Hivebeam.Test.FakeClaudeConnection do
 
   def send_request(_conn_pid, "session/new", params, _timeout) do
     Hivebeam.Test.FakeClaudeAcpStore.add_call({:session_new, params})
-    %{"result" => %{"sessionId" => "claude-session-test"}}
+
+    %{
+      "result" => %{
+        "sessionId" => "claude-session-test",
+        "modes" => %{
+          "availableModes" => [
+            %{"id" => "default"},
+            %{"id" => "acceptEdits"},
+            %{"id" => "dontAsk"},
+            %{"id" => "bypassPermissions"},
+            %{"id" => "plan"}
+          ]
+        }
+      }
+    }
+  end
+
+  def send_request(_conn_pid, "session/set_mode", params, _timeout) do
+    Hivebeam.Test.FakeClaudeAcpStore.add_call({:session_set_mode, params})
+    %{"result" => %{}}
   end
 
   def send_request(_conn_pid, "session/prompt", params, _timeout) do
@@ -107,6 +126,46 @@ defmodule Hivebeam.Test.FakeClaudeConnection do
   end
 end
 
+defmodule Hivebeam.Test.FakeClaudeModeUnavailableConnection do
+  def send_request(_conn_pid, "initialize", params, _timeout) do
+    Hivebeam.Test.FakeClaudeAcpStore.add_call({:initialize, params})
+    %{"result" => %{"protocolVersion" => 1}}
+  end
+
+  def send_request(_conn_pid, "session/new", params, _timeout) do
+    Hivebeam.Test.FakeClaudeAcpStore.add_call({:session_new, params})
+
+    %{
+      "result" => %{
+        "sessionId" => "claude-session-test",
+        "modes" => %{
+          "availableModes" => [
+            %{"id" => "default"},
+            %{"id" => "acceptEdits"},
+            %{"id" => "dontAsk"},
+            %{"id" => "plan"}
+          ]
+        }
+      }
+    }
+  end
+
+  def send_request(_conn_pid, "session/set_mode", params, _timeout) do
+    Hivebeam.Test.FakeClaudeAcpStore.add_call({:session_set_mode, params})
+    %{"result" => %{}}
+  end
+
+  def send_request(_conn_pid, method, params, _timeout) do
+    Hivebeam.Test.FakeClaudeAcpStore.add_call({method, params})
+    %{"error" => %{"code" => -32000, "message" => "unexpected method"}}
+  end
+
+  def send_notification(_conn_pid, method, params) do
+    Hivebeam.Test.FakeClaudeAcpStore.add_call({method, params})
+    :ok
+  end
+end
+
 defmodule Hivebeam.ClaudeBridgeTest do
   use ExUnit.Case, async: false
 
@@ -122,15 +181,18 @@ defmodule Hivebeam.ClaudeBridgeTest do
     :ok
   end
 
-  test "connects with claude defaults and reports status" do
+  test "connects with claude defaults, project settings source, and mode enforcement" do
     bridge_name = :"claude_bridge_#{System.unique_integer([:positive])}"
+    tool_cwd = Path.join(System.tmp_dir!(), "hivebeam_claude_bridge_tool_cwd")
+
+    File.mkdir_p!(tool_cwd)
 
     {:ok, bridge_pid} =
       ClaudeBridge.start_link(
         name: bridge_name,
         acpex_module: Hivebeam.Test.FakeClaudeClientModule,
         connection_module: Hivebeam.Test.FakeClaudeConnection,
-        config: %{acp_command: {"fake-claude-acp", []}, reconnect_ms: 20}
+        config: %{acp_command: {"fake-claude-acp", []}, reconnect_ms: 20, tool_cwd: tool_cwd}
       )
 
     on_exit(fn -> safe_stop(bridge_pid) end)
@@ -144,6 +206,7 @@ defmodule Hivebeam.ClaudeBridgeTest do
     assert status.status == :connected
     assert status.acp_provider == "claude"
     assert status.session_id == "claude-session-test"
+    assert status.enforced_provider_mode == "default"
 
     assert {:initialize, initialize_payload} =
              Enum.find(Hivebeam.Test.FakeClaudeAcpStore.calls(), fn {kind, _} ->
@@ -151,6 +214,103 @@ defmodule Hivebeam.ClaudeBridgeTest do
              end)
 
     assert get_in(initialize_payload, ["clientCapabilities", "fs", "readTextFile"]) == true
+
+    assert {:session_new, session_new_payload} =
+             Enum.find(Hivebeam.Test.FakeClaudeAcpStore.calls(), fn
+               {:session_new, _params} -> true
+               _ -> false
+             end)
+
+    assert session_new_payload["cwd"] == tool_cwd
+
+    assert get_in(session_new_payload, ["_meta", "claudeCode", "options", "settingSources"]) == [
+             "project"
+           ]
+
+    assert {:session_set_mode, %{"modeId" => "default"}} =
+             Enum.find(Hivebeam.Test.FakeClaudeAcpStore.calls(), fn
+               {:session_set_mode, _params} -> true
+               _ -> false
+             end)
+  end
+
+  test "enforces dontAsk mode when approval mode is deny" do
+    bridge_name = :"claude_bridge_#{System.unique_integer([:positive])}"
+
+    {:ok, bridge_pid} =
+      ClaudeBridge.start_link(
+        name: bridge_name,
+        acpex_module: Hivebeam.Test.FakeClaudeClientModule,
+        connection_module: Hivebeam.Test.FakeClaudeConnection,
+        config: %{acp_command: {"fake-claude-acp", []}, reconnect_ms: 20, approval_mode: :deny}
+      )
+
+    on_exit(fn -> safe_stop(bridge_pid) end)
+
+    wait_until(fn ->
+      {:ok, status} = ClaudeBridge.status(bridge_name)
+      status.connected
+    end)
+
+    {:ok, status} = ClaudeBridge.status(bridge_name)
+    assert status.enforced_provider_mode == "dontAsk"
+
+    assert {:session_set_mode, %{"modeId" => "dontAsk"}} =
+             Enum.find(Hivebeam.Test.FakeClaudeAcpStore.calls(), fn
+               {:session_set_mode, _params} -> true
+               _ -> false
+             end)
+  end
+
+  test "enforces bypassPermissions mode when approval mode is allow" do
+    bridge_name = :"claude_bridge_#{System.unique_integer([:positive])}"
+
+    {:ok, bridge_pid} =
+      ClaudeBridge.start_link(
+        name: bridge_name,
+        acpex_module: Hivebeam.Test.FakeClaudeClientModule,
+        connection_module: Hivebeam.Test.FakeClaudeConnection,
+        config: %{acp_command: {"fake-claude-acp", []}, reconnect_ms: 20, approval_mode: :allow}
+      )
+
+    on_exit(fn -> safe_stop(bridge_pid) end)
+
+    wait_until(fn ->
+      {:ok, status} = ClaudeBridge.status(bridge_name)
+      status.connected
+    end)
+
+    {:ok, status} = ClaudeBridge.status(bridge_name)
+    assert status.enforced_provider_mode == "bypassPermissions"
+
+    assert {:session_set_mode, %{"modeId" => "bypassPermissions"}} =
+             Enum.find(Hivebeam.Test.FakeClaudeAcpStore.calls(), fn
+               {:session_set_mode, _params} -> true
+               _ -> false
+             end)
+  end
+
+  test "degrades bridge when required mode is unavailable" do
+    bridge_name = :"claude_bridge_#{System.unique_integer([:positive])}"
+
+    {:ok, bridge_pid} =
+      ClaudeBridge.start_link(
+        name: bridge_name,
+        acpex_module: Hivebeam.Test.FakeClaudeClientModule,
+        connection_module: Hivebeam.Test.FakeClaudeModeUnavailableConnection,
+        config: %{acp_command: {"fake-claude-acp", []}, reconnect_ms: 20, approval_mode: :allow}
+      )
+
+    on_exit(fn -> safe_stop(bridge_pid) end)
+
+    wait_until(fn ->
+      {:ok, status} = ClaudeBridge.status(bridge_name)
+      status.status == :degraded
+    end)
+
+    {:ok, status} = ClaudeBridge.status(bridge_name)
+    refute status.connected
+    assert {:mode_unavailable, "bypassPermissions", _available_modes} = status.last_error
   end
 
   test "collects prompt updates and normalizes stop reason" do
