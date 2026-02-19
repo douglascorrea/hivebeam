@@ -32,7 +32,13 @@ defmodule Hivebeam.Gateway.HttpApiTest do
     def handle_call(:status, _from, state) do
       {:reply,
        {:ok,
-        %{status: :connected, connected: true, session_id: state.session_id, in_flight_prompt: false, approval_mode: :ask}}, state}
+        %{
+          status: :connected,
+          connected: true,
+          session_id: state.session_id,
+          in_flight_prompt: false,
+          approval_mode: :ask
+        }}, state}
     end
 
     def handle_call(:cancel, _from, state), do: {:reply, :ok, state}
@@ -40,14 +46,24 @@ defmodule Hivebeam.Gateway.HttpApiTest do
     def handle_call({:prompt, _text, opts}, _from, state) do
       stream_to = Keyword.fetch!(opts, :stream_to)
       send(stream_to, {:codex_prompt_stream, %{event: :start}})
-      send(stream_to, {:codex_prompt_stream, %{event: :update, update: %{"type" => "agent_message_chunk", "text" => "hi"}}})
+
+      send(
+        stream_to,
+        {:codex_prompt_stream,
+         %{event: :update, update: %{"type" => "agent_message_chunk", "text" => "hi"}}}
+      )
+
       send(stream_to, {:codex_prompt_stream, %{event: :done}})
-      {:reply, {:ok, %{session_id: state.session_id, stop_reason: "done", message_chunks: ["hi"]}}, state}
+
+      {:reply,
+       {:ok, %{session_id: state.session_id, stop_reason: "done", message_chunks: ["hi"]}}, state}
     end
   end
 
   setup do
-    data_dir = Path.join(System.tmp_dir!(), "hivebeam_gateway_http_#{System.unique_integer([:positive])}")
+    data_dir =
+      Path.join(System.tmp_dir!(), "hivebeam_gateway_http_#{System.unique_integer([:positive])}")
+
     File.rm_rf!(data_dir)
     File.mkdir_p!(data_dir)
 
@@ -71,7 +87,8 @@ defmodule Hivebeam.Gateway.HttpApiTest do
   end
 
   test "creates session, prompts, reads events, and closes session" do
-    create_body = Jason.encode!(%{"provider" => "codex", "cwd" => File.cwd!(), "approval_mode" => "ask"})
+    create_body =
+      Jason.encode!(%{"provider" => "codex", "cwd" => File.cwd!(), "approval_mode" => "ask"})
 
     create_conn =
       conn(:post, "/v1/sessions", create_body)
@@ -120,7 +137,10 @@ defmodule Hivebeam.Gateway.HttpApiTest do
       |> Router.call(Router.init([]))
 
     assert attach_conn.status == 200
-    %{"events" => attach_events, "session" => attach_session} = Jason.decode!(attach_conn.resp_body)
+
+    %{"events" => attach_events, "session" => attach_session} =
+      Jason.decode!(attach_conn.resp_body)
+
     assert Enum.any?(attach_events, &(&1["kind"] == "prompt_completed"))
     assert attach_session["gateway_session_key"] == key
 

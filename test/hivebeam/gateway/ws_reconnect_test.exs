@@ -5,7 +5,9 @@ defmodule Hivebeam.Gateway.WsReconnectTest do
   alias Hivebeam.Gateway.Store
 
   setup do
-    data_dir = Path.join(System.tmp_dir!(), "hivebeam_gateway_ws_#{System.unique_integer([:positive])}")
+    data_dir =
+      Path.join(System.tmp_dir!(), "hivebeam_gateway_ws_#{System.unique_integer([:positive])}")
+
     File.rm_rf!(data_dir)
     File.mkdir_p!(data_dir)
 
@@ -34,7 +36,10 @@ defmodule Hivebeam.Gateway.WsReconnectTest do
 
   test "replay after a cursor returns only missed events" do
     assert {:ok, %{seq: 1}} = EventLog.append("hbs_ws_reconnect", "stream_start", "upstream", %{})
-    assert {:ok, %{seq: 2}} = EventLog.append("hbs_ws_reconnect", "stream_update", "upstream", %{text: "a"})
+
+    assert {:ok, %{seq: 2}} =
+             EventLog.append("hbs_ws_reconnect", "stream_update", "upstream", %{text: "a"})
+
     assert {:ok, %{seq: 3}} = EventLog.append("hbs_ws_reconnect", "stream_done", "upstream", %{})
 
     assert {:ok, replay1} = Store.read_events("hbs_ws_reconnect", 0, 10)
@@ -42,8 +47,13 @@ defmodule Hivebeam.Gateway.WsReconnectTest do
 
     last_seq = replay1.next_after_seq
 
-    assert {:ok, %{seq: 4}} = EventLog.append("hbs_ws_reconnect", "prompt_started", "gateway", %{request_id: "r2"})
-    assert {:ok, %{seq: 5}} = EventLog.append("hbs_ws_reconnect", "prompt_completed", "gateway", %{request_id: "r2"})
+    assert {:ok, %{seq: 4}} =
+             EventLog.append("hbs_ws_reconnect", "prompt_started", "gateway", %{request_id: "r2"})
+
+    assert {:ok, %{seq: 5}} =
+             EventLog.append("hbs_ws_reconnect", "prompt_completed", "gateway", %{
+               request_id: "r2"
+             })
 
     assert {:ok, replay2} = Store.read_events("hbs_ws_reconnect", last_seq, 10)
     assert Enum.map(replay2.events, & &1.seq) == [4, 5]

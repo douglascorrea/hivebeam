@@ -116,7 +116,10 @@ defmodule Hivebeam.CodexAcpClient do
            ensure_approved(state, "terminal/create", %{command: command, args: args, cwd: cwd}) do
       terminal_id = "term-" <> Integer.to_string(System.unique_integer([:positive]))
       env_pairs = normalize_env(fetch(request, :env))
-      output_limit = fetch(request, :output_byte_limit) || fetch(request, :outputByteLimit) || @default_terminal_output_limit
+
+      output_limit =
+        fetch(request, :output_byte_limit) || fetch(request, :outputByteLimit) ||
+          @default_terminal_output_limit
 
       owner = self()
 
@@ -152,7 +155,8 @@ defmodule Hivebeam.CodexAcpClient do
   def handle_request("terminal/output", request, state) when is_map(request) do
     state = drain_terminal_messages(state)
 
-    with {:ok, terminal} <- fetch_terminal(state, fetch(request, :terminal_id) || fetch(request, :terminalId)) do
+    with {:ok, terminal} <-
+           fetch_terminal(state, fetch(request, :terminal_id) || fetch(request, :terminalId)) do
       response = %{
         "output" => terminal.output,
         "truncated" => terminal.truncated,
@@ -186,7 +190,8 @@ defmodule Hivebeam.CodexAcpClient do
 
     with {:ok, terminal} <- fetch_terminal(state, terminal_id),
          :ok <- ensure_approved(state, "terminal/kill", %{terminal_id: terminal_id}) do
-      if not terminal.done? and is_pid(terminal.worker_pid) and Process.alive?(terminal.worker_pid) do
+      if not terminal.done? and is_pid(terminal.worker_pid) and
+           Process.alive?(terminal.worker_pid) do
         Process.exit(terminal.worker_pid, :kill)
       end
 
@@ -210,7 +215,8 @@ defmodule Hivebeam.CodexAcpClient do
     terminal_id = fetch(request, :terminal_id) || fetch(request, :terminalId)
 
     with {:ok, terminal} <- fetch_terminal(state, terminal_id) do
-      if not terminal.done? and is_pid(terminal.worker_pid) and Process.alive?(terminal.worker_pid) do
+      if not terminal.done? and is_pid(terminal.worker_pid) and
+           Process.alive?(terminal.worker_pid) do
         Process.exit(terminal.worker_pid, :kill)
       end
 

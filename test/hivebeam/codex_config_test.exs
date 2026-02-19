@@ -9,8 +9,7 @@ defmodule Hivebeam.CodexConfigTest do
         {"HIVEBEAM_ACP_PROVIDER", nil},
         {"HIVEBEAM_CODEX_ACP_CMD", nil},
         {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", nil},
-        {"HIVEBEAM_CLUSTER_NODES", nil},
-        {"HIVEBEAM_CLUSTER_RETRY_MS", nil},
+        {"HIVEBEAM_ACP_RECONNECT_MS", nil},
         {"HIVEBEAM_CODEX_PROMPT_TIMEOUT_MS", nil},
         {"HIVEBEAM_CODEX_CONNECT_TIMEOUT_MS", nil},
         {"HIVEBEAM_CODEX_BRIDGE_NAME", nil}
@@ -19,8 +18,7 @@ defmodule Hivebeam.CodexConfigTest do
         assert CodexConfig.acp_provider() == "codex"
         assert {:ok, {command, []}} = CodexConfig.acp_command()
         assert is_binary(command) and command != ""
-        assert CodexConfig.cluster_nodes() == []
-        assert CodexConfig.cluster_retry_ms() == 5_000
+        assert CodexConfig.reconnect_ms() == 5_000
         assert CodexConfig.prompt_timeout_ms() == 120_000
         assert CodexConfig.connect_timeout_ms() == 30_000
         assert CodexConfig.bridge_name() == Hivebeam.CodexBridge
@@ -28,19 +26,16 @@ defmodule Hivebeam.CodexConfigTest do
     )
   end
 
-  test "parses command and cluster env vars" do
+  test "parses codex command env var" do
     with_env(
       [
         {"HIVEBEAM_ACP_PROVIDER", "codex"},
         {"HIVEBEAM_CODEX_ACP_CMD", "docker compose exec -T codex-node codex-acp"},
-        {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", nil},
-        {"HIVEBEAM_CLUSTER_NODES", "codex@node-a, codex@node-b"}
+        {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", nil}
       ],
       fn ->
         assert {:ok, {"docker", ["compose", "exec", "-T", "codex-node", "codex-acp"]}} =
                  CodexConfig.acp_command()
-
-        assert CodexConfig.cluster_nodes() == [:"codex@node-a", :"codex@node-b"]
       end
     )
   end
@@ -119,12 +114,12 @@ defmodule Hivebeam.CodexConfigTest do
   test "falls back to defaults when integer envs are invalid" do
     with_env(
       [
-        {"HIVEBEAM_CLUSTER_RETRY_MS", "abc"},
+        {"HIVEBEAM_ACP_RECONNECT_MS", "abc"},
         {"HIVEBEAM_CODEX_PROMPT_TIMEOUT_MS", "-1"},
         {"HIVEBEAM_CODEX_CONNECT_TIMEOUT_MS", "0"}
       ],
       fn ->
-        assert CodexConfig.cluster_retry_ms() == 5_000
+        assert CodexConfig.reconnect_ms() == 5_000
         assert CodexConfig.prompt_timeout_ms() == 120_000
         assert CodexConfig.connect_timeout_ms() == 30_000
       end

@@ -76,7 +76,9 @@ defmodule Hivebeam.Acp.JsonRpcConnection do
         {:noreply, %{state | next_id: id + 1, pending: pending}}
 
       {:error, reason} ->
-        {:reply, %{"error" => %{code: -32_000, message: "request send failed", reason: inspect(reason)}}, state}
+        {:reply,
+         %{"error" => %{code: -32_000, message: "request send failed", reason: inspect(reason)}},
+         state}
     end
   end
 

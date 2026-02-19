@@ -54,9 +54,14 @@ defmodule Hivebeam.Gateway.WS.Handler do
                SessionRouter.prompt(session_key, request_id, text_value, payload["timeout_ms"]) do
           {:reply, {:text, encode(%{type: "ack", action: "prompt", data: result})}, state}
         else
-          :error -> {:reply, {:text, encode(%{type: "error", error: "invalid_prompt_payload"})}, state}
-          {:error, reason} -> {:reply, {:text, encode(%{type: "error", error: inspect(reason)})}, state}
-          _ -> {:reply, {:text, encode(%{type: "error", error: "invalid_prompt_payload"})}, state}
+          :error ->
+            {:reply, {:text, encode(%{type: "error", error: "invalid_prompt_payload"})}, state}
+
+          {:error, reason} ->
+            {:reply, {:text, encode(%{type: "error", error: inspect(reason)})}, state}
+
+          _ ->
+            {:reply, {:text, encode(%{type: "error", error: "invalid_prompt_payload"})}, state}
         end
 
       {:ok, %{"type" => "cancel"}} ->
@@ -64,7 +69,8 @@ defmodule Hivebeam.Gateway.WS.Handler do
              {:ok, result} <- SessionRouter.cancel(session_key) do
           {:reply, {:text, encode(%{type: "ack", action: "cancel", data: result})}, state}
         else
-          {:error, reason} -> {:reply, {:text, encode(%{type: "error", error: inspect(reason)})}, state}
+          {:error, reason} ->
+            {:reply, {:text, encode(%{type: "error", error: inspect(reason)})}, state}
         end
 
       {:ok, %{"type" => "approval"} = payload} ->
@@ -74,7 +80,8 @@ defmodule Hivebeam.Gateway.WS.Handler do
              {:ok, result} <- SessionRouter.approve(session_key, approval_ref, decision) do
           {:reply, {:text, encode(%{type: "ack", action: "approval", data: result})}, state}
         else
-          _ -> {:reply, {:text, encode(%{type: "error", error: "invalid_approval_payload"})}, state}
+          _ ->
+            {:reply, {:text, encode(%{type: "error", error: "invalid_approval_payload"})}, state}
         end
 
       {:ok, %{"type" => "ping"}} ->
@@ -116,13 +123,15 @@ defmodule Hivebeam.Gateway.WS.Handler do
 
   defp attach_and_reply(state, session_key, after_seq)
        when is_binary(session_key) and session_key != "" do
-    _ = if Map.get(state, :attached?, false), do: SessionRouter.unsubscribe(state.session_key), else: :ok
+    _ =
+      if Map.get(state, :attached?, false),
+        do: SessionRouter.unsubscribe(state.session_key),
+        else: :ok
 
     with {:ok, _session} <- SessionRouter.get_session(session_key),
          {:ok, _pid} <- SessionRouter.ensure_worker(session_key, recovered?: true),
          {:ok, _ref} <- SessionRouter.subscribe(session_key, self()),
          {:ok, replay} <- replay_events(session_key, after_seq, 1_000, self()) do
-
       response =
         encode(%{
           type: "attached",
@@ -144,8 +153,9 @@ defmodule Hivebeam.Gateway.WS.Handler do
     {:reply, {:text, encode(%{type: "error", error: "gateway_session_key is required"})}, state}
   end
 
-  defp attached_session_key(%{attached?: true, session_key: session_key}) when is_binary(session_key),
-    do: {:ok, session_key}
+  defp attached_session_key(%{attached?: true, session_key: session_key})
+       when is_binary(session_key),
+       do: {:ok, session_key}
 
   defp attached_session_key(_state), do: {:error, :not_attached}
 
@@ -190,7 +200,14 @@ defmodule Hivebeam.Gateway.WS.Handler do
     case SessionRouter.events(session_key, after_seq, limit) do
       {:ok, %{events: events, next_after_seq: next_after_seq, has_more: true}} ->
         Enum.each(events, fn event -> send(sink, {:replay_event, event}) end)
-        do_replay_events(session_key, next_after_seq, limit, sink, replayed_count + length(events))
+
+        do_replay_events(
+          session_key,
+          next_after_seq,
+          limit,
+          sink,
+          replayed_count + length(events)
+        )
 
       {:ok, %{events: events, next_after_seq: next_after_seq, has_more: false}} ->
         Enum.each(events, fn event -> send(sink, {:replay_event, event}) end)

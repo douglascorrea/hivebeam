@@ -31,12 +31,11 @@ defmodule Hivebeam.MixProject do
     ]
   end
 
-  # Run "mix help deps" to learn about dependencies.
+  # Run "mix help deps" to learn about applications.
   defp deps do
     [
-      {:term_ui, git: "https://github.com/pcharbon70/term_ui.git"},
-      {:libcluster, "~> 3.5"},
-      {:plug_cowboy, "~> 2.7"}
+      {:plug_cowboy, "~> 2.7"},
+      {:jason, "~> 1.4"}
     ]
   end
 end

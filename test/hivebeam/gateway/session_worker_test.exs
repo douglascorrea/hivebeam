@@ -54,11 +54,19 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
       stream_to = Keyword.fetch!(opts, :stream_to)
       approval_to = Keyword.fetch!(opts, :approval_to)
 
-      send(stream_to, {:codex_prompt_stream, %{event: :start, update: %{"type" => "agent_message_chunk"}}})
+      send(
+        stream_to,
+        {:codex_prompt_stream, %{event: :start, update: %{"type" => "agent_message_chunk"}}}
+      )
 
       if text == "needs approval" do
         ref = make_ref()
-        send(approval_to, {:codex_tool_approval_request, %{ref: ref, reply_to: self(), request: %{operation: "terminal/create"}}})
+
+        send(
+          approval_to,
+          {:codex_tool_approval_request,
+           %{ref: ref, reply_to: self(), request: %{operation: "terminal/create"}}}
+        )
 
         receive do
           {:codex_tool_approval_reply, ^ref, true} ->
@@ -68,10 +76,17 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
             send(stream_to, {:codex_prompt_stream, %{event: :status, message: "denied"}})
         after
           500 ->
-            send(stream_to, {:codex_prompt_stream, %{event: :status, message: "approval_timeout"}})
+            send(
+              stream_to,
+              {:codex_prompt_stream, %{event: :status, message: "approval_timeout"}}
+            )
         end
       else
-        send(stream_to, {:codex_prompt_stream, %{event: :update, update: %{"type" => "agent_message_chunk", "text" => "hello"}}})
+        send(
+          stream_to,
+          {:codex_prompt_stream,
+           %{event: :update, update: %{"type" => "agent_message_chunk", "text" => "hello"}}}
+        )
       end
 
       send(stream_to, {:codex_prompt_stream, %{event: :done}})
@@ -83,7 +98,12 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
   end
 
   setup do
-    data_dir = Path.join(System.tmp_dir!(), "hivebeam_gateway_worker_#{System.unique_integer([:positive])}")
+    data_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "hivebeam_gateway_worker_#{System.unique_integer([:positive])}"
+      )
+
     File.rm_rf!(data_dir)
     File.mkdir_p!(data_dir)
 
@@ -120,7 +140,11 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
              })
 
     assert {:ok, worker} =
-             SessionWorker.start_link(session_key: key, bridge_module: FakeBridge, recovered?: false)
+             SessionWorker.start_link(
+               session_key: key,
+               bridge_module: FakeBridge,
+               recovered?: false
+             )
 
     assert {:ok, %{accepted: true, request_id: "req-1"}} =
              GenServer.call(worker, {:prompt, "req-1", "hello", 2_000}, 5_000)
@@ -160,7 +184,11 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
              })
 
     assert {:ok, worker} =
-             SessionWorker.start_link(session_key: key, bridge_module: FakeBridge, recovered?: false)
+             SessionWorker.start_link(
+               session_key: key,
+               bridge_module: FakeBridge,
+               recovered?: false
+             )
 
     assert {:ok, %{accepted: true, request_id: "req-2"}} =
              GenServer.call(worker, {:prompt, "req-2", "needs approval", 2_000}, 5_000)
@@ -168,7 +196,8 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
     approval_ref =
       wait_for_value(fn ->
         with {:ok, replay} <- Store.read_events(key, 0, 50),
-             event when not is_nil(event) <- Enum.find(replay.events, &(&1.kind == "approval_requested")) do
+             event when not is_nil(event) <-
+               Enum.find(replay.events, &(&1.kind == "approval_requested")) do
           get_in(event, [:payload, "approval_ref"])
         else
           _ -> nil
@@ -177,7 +206,8 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
 
     assert is_binary(approval_ref)
 
-    assert {:ok, %{accepted: true}} = GenServer.call(worker, {:approve, approval_ref, "allow"}, 5_000)
+    assert {:ok, %{accepted: true}} =
+             GenServer.call(worker, {:approve, approval_ref, "allow"}, 5_000)
 
     wait_until(fn ->
       case Store.get_request(key, "req-2") do

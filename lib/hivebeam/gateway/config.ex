@@ -7,11 +7,14 @@ defmodule Hivebeam.Gateway.Config do
   @default_reconnect_ms 2_000
   @default_approval_timeout_ms 120_000
 
-  @spec enabled?() :: boolean()
-  def enabled? do
-    case System.get_env("HIVEBEAM_GATEWAY_ENABLED", "0") |> String.trim() |> String.downcase() do
-      value when value in ["1", "true", "yes", "on"] -> true
-      _ -> false
+  @spec require_token!() :: :ok
+  def require_token! do
+    case token() do
+      nil ->
+        raise "HIVEBEAM_GATEWAY_TOKEN is required"
+
+      _value ->
+        :ok
     end
   end
 
@@ -73,7 +76,10 @@ defmodule Hivebeam.Gateway.Config do
 
   @spec max_events_per_session() :: pos_integer()
   def max_events_per_session do
-    parse_pos_integer(System.get_env("HIVEBEAM_GATEWAY_MAX_EVENTS_PER_SESSION"), @default_max_events)
+    parse_pos_integer(
+      System.get_env("HIVEBEAM_GATEWAY_MAX_EVENTS_PER_SESSION"),
+      @default_max_events
+    )
   end
 
   @spec reconnect_ms() :: pos_integer()

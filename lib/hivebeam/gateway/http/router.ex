@@ -4,14 +4,16 @@ defmodule Hivebeam.Gateway.HTTP.Router do
 
   alias Hivebeam.Gateway.SessionRouter
 
-  plug :match
-  plug Hivebeam.Gateway.HTTP.Auth
-  plug Plug.Parsers,
+  plug(:match)
+  plug(Hivebeam.Gateway.HTTP.Auth)
+
+  plug(Plug.Parsers,
     parsers: [:json],
     pass: ["application/json"],
     json_decoder: Jason
+  )
 
-  plug :dispatch
+  plug(:dispatch)
 
   get "/healthz" do
     send_json(conn, 200, %{status: "ok"})

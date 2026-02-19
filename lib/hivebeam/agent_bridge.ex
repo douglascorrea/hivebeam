@@ -83,7 +83,7 @@ defmodule Hivebeam.AgentBridge do
       last_prompt_result: nil,
       connect_timeout_ms: Map.get(config, :connect_timeout_ms, CodexConfig.connect_timeout_ms()),
       prompt_timeout_ms: Map.get(config, :prompt_timeout_ms, CodexConfig.prompt_timeout_ms()),
-      reconnect_ms: Map.get(config, :reconnect_ms, CodexConfig.cluster_retry_ms()),
+      reconnect_ms: Map.get(config, :reconnect_ms, CodexConfig.reconnect_ms()),
       reconnect_timer_ref: nil,
       tool_cwd: Map.get(config, :tool_cwd, File.cwd!()),
       default_approval_mode: default_approval_mode,

@@ -90,9 +90,11 @@ defmodule Hivebeam.Gateway.Store do
          {:ok, session_tab} <- create_table(@session_table),
          {:ok, counter_tab} <- create_table(@counter_table),
          {:ok, request_tab} <- create_table(@request_table),
-         {:ok, session_ref} <- open_dets(@session_dets, Path.join(data_dir, "session_index.dets"), :set),
+         {:ok, session_ref} <-
+           open_dets(@session_dets, Path.join(data_dir, "session_index.dets"), :set),
          {:ok, event_ref} <- open_dets(@event_dets, Path.join(data_dir, "event_log.dets"), :set),
-         {:ok, request_ref} <- open_dets(@request_dets, Path.join(data_dir, "request_index.dets"), :set) do
+         {:ok, request_ref} <-
+           open_dets(@request_dets, Path.join(data_dir, "request_index.dets"), :set) do
       state = %{
         data_dir: data_dir,
         max_events_per_session: max_events,
@@ -220,7 +222,8 @@ defmodule Hivebeam.Gateway.Store do
         event -> Map.get(event, :seq, after_seq)
       end
 
-    {:reply, {:ok, %{events: selected, next_after_seq: next_after_seq, has_more: has_more}}, state}
+    {:reply, {:ok, %{events: selected, next_after_seq: next_after_seq, has_more: has_more}},
+     state}
   end
 
   def handle_call({:put_request, gateway_session_key, request_id, record}, _from, state) do
@@ -286,7 +289,12 @@ defmodule Hivebeam.Gateway.Store do
       :dets.foldl(
         fn {gateway_session_key, session}, _acc ->
           :ets.insert(state.session_table, {gateway_session_key, session})
-          :ets.insert(state.counter_table, {gateway_session_key, Map.get(session, :last_seq, 0) + 1})
+
+          :ets.insert(
+            state.counter_table,
+            {gateway_session_key, Map.get(session, :last_seq, 0) + 1}
+          )
+
           :ok
         end,
         :ok,

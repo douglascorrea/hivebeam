@@ -5,7 +5,12 @@ defmodule Hivebeam.Gateway.EventLogTest do
   alias Hivebeam.Gateway.Store
 
   setup do
-    data_dir = Path.join(System.tmp_dir!(), "hivebeam_gateway_eventlog_#{System.unique_integer([:positive])}")
+    data_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "hivebeam_gateway_eventlog_#{System.unique_integer([:positive])}"
+      )
+
     File.rm_rf!(data_dir)
     File.mkdir_p!(data_dir)
 
@@ -37,7 +42,9 @@ defmodule Hivebeam.Gateway.EventLogTest do
 
   test "append and replay use the durable store contract" do
     assert {:ok, %{seq: 1}} = EventLog.append("hbs_ev", "session_created", "gateway", %{})
-    assert {:ok, %{seq: 2}} = EventLog.append("hbs_ev", "stream_update", "upstream", %{text: "hello"})
+
+    assert {:ok, %{seq: 2}} =
+             EventLog.append("hbs_ev", "stream_update", "upstream", %{text: "hello"})
 
     assert {:ok, replay} = EventLog.replay("hbs_ev", 0, 10)
     assert Enum.map(replay.events, & &1.seq) == [1, 2]

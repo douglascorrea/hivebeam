@@ -93,7 +93,9 @@ defmodule Hivebeam.Gateway.SessionWorker do
           payload = %{request_id: request_id, timeout_ms: timeout_ms}
           state = append_and_broadcast(state, "prompt_enqueued", "gateway", payload)
 
-          queue = :queue.in(%{request_id: request_id, text: text, timeout_ms: timeout_ms}, state.queue)
+          queue =
+            :queue.in(%{request_id: request_id, text: text, timeout_ms: timeout_ms}, state.queue)
+
           state = %{state | queue: queue}
           state = maybe_start_next_prompt(state)
 
@@ -117,7 +119,13 @@ defmodule Hivebeam.Gateway.SessionWorker do
   def handle_call(:cancel, _from, state) do
     case state.in_flight do
       nil ->
-        {:reply, {:ok, %{accepted: false, reason: "no_prompt_in_progress", last_seq: current_last_seq(state.session_key)}}, state}
+        {:reply,
+         {:ok,
+          %{
+            accepted: false,
+            reason: "no_prompt_in_progress",
+            last_seq: current_last_seq(state.session_key)
+          }}, state}
 
       _in_flight ->
         reply = state.bridge_module.cancel_prompt(bridge_name: state.bridge_name)
@@ -130,7 +138,8 @@ defmodule Hivebeam.Gateway.SessionWorker do
             reason: inspect(reply)
           })
 
-        {:reply, {:ok, %{accepted: accepted, last_seq: current_last_seq(state.session_key)}}, state}
+        {:reply, {:ok, %{accepted: accepted, last_seq: current_last_seq(state.session_key)}},
+         state}
     end
   end
 
@@ -179,9 +188,15 @@ defmodule Hivebeam.Gateway.SessionWorker do
     reply_to = Map.get(payload, :reply_to)
 
     if is_reference(ref) and is_pid(reply_to) do
-      timer_ref = Process.send_after(self(), {:approval_timeout, approval_ref}, state.approval_timeout_ms)
+      timer_ref =
+        Process.send_after(self(), {:approval_timeout, approval_ref}, state.approval_timeout_ms)
 
-      pending = Map.put(state.pending_approvals, approval_ref, %{ref: ref, reply_to: reply_to, timer_ref: timer_ref})
+      pending =
+        Map.put(state.pending_approvals, approval_ref, %{
+          ref: ref,
+          reply_to: reply_to,
+          timer_ref: timer_ref
+        })
 
       state =
         state
@@ -266,7 +281,10 @@ defmodule Hivebeam.Gateway.SessionWorker do
     {:noreply, state}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{in_flight: %{task_ref: ref} = in_flight} = state) do
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{in_flight: %{task_ref: ref} = in_flight} = state
+      ) do
     state =
       state
       |> append_and_broadcast("prompt_failed", "gateway", %{
@@ -317,12 +335,19 @@ defmodule Hivebeam.Gateway.SessionWorker do
             state
 
           {:error, reason} ->
-            Logger.warning("could not start session bridge #{state.session_key}: #{inspect(reason)}")
-            append_and_broadcast(state, "upstream_start_failed", "gateway", %{reason: inspect(reason)})
+            Logger.warning(
+              "could not start session bridge #{state.session_key}: #{inspect(reason)}"
+            )
+
+            append_and_broadcast(state, "upstream_start_failed", "gateway", %{
+              reason: inspect(reason)
+            })
         end
 
       {:error, reason} ->
-        append_and_broadcast(state, "upstream_command_invalid", "gateway", %{reason: inspect(reason)})
+        append_and_broadcast(state, "upstream_command_invalid", "gateway", %{
+          reason: inspect(reason)
+        })
     end
   end
 
@@ -373,14 +398,19 @@ defmodule Hivebeam.Gateway.SessionWorker do
   defp maybe_emit_connection_events(state, connected, upstream_session_id) do
     cond do
       connected and not state.connected ->
-        append_and_broadcast(state, "upstream_connected", "gateway", %{upstream_session_id: upstream_session_id})
+        append_and_broadcast(state, "upstream_connected", "gateway", %{
+          upstream_session_id: upstream_session_id
+        })
 
       not connected and state.connected ->
         append_and_broadcast(state, "upstream_disconnected", "gateway", %{})
 
       connected and is_binary(state.upstream_session_id) and is_binary(upstream_session_id) and
           state.upstream_session_id != upstream_session_id ->
-        append_and_broadcast(state, "upstream_session_rotated", "gateway", %{from: state.upstream_session_id, to: upstream_session_id})
+        append_and_broadcast(state, "upstream_session_rotated", "gateway", %{
+          from: state.upstream_session_id,
+          to: upstream_session_id
+        })
 
       true ->
         state
@@ -396,7 +426,8 @@ defmodule Hivebeam.Gateway.SessionWorker do
             started_at: now_iso()
           })
 
-        state = append_and_broadcast(state, "prompt_started", "gateway", %{request_id: next.request_id})
+        state =
+          append_and_broadcast(state, "prompt_started", "gateway", %{request_id: next.request_id})
 
         owner = self()
 
@@ -490,7 +521,10 @@ defmodule Hivebeam.Gateway.SessionWorker do
 
   defp sanitize_payload(value) when is_pid(value), do: inspect(value)
   defp sanitize_payload(value) when is_reference(value), do: inspect(value)
-  defp sanitize_payload(value) when is_tuple(value), do: value |> Tuple.to_list() |> Enum.map(&sanitize_payload/1)
+
+  defp sanitize_payload(value) when is_tuple(value),
+    do: value |> Tuple.to_list() |> Enum.map(&sanitize_payload/1)
+
   defp sanitize_payload(value), do: value
 
   defp normalize_key(key) when is_atom(key), do: Atom.to_string(key)

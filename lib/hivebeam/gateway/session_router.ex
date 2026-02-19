@@ -50,7 +50,8 @@ defmodule Hivebeam.Gateway.SessionRouter do
         }
 
         with {:ok, _persisted_session} <- Store.upsert_session(session),
-             {:ok, _event} <- EventLog.append(key, "session_created", "gateway", %{provider: provider}),
+             {:ok, _event} <-
+               EventLog.append(key, "session_created", "gateway", %{provider: provider}),
              {:ok, _pid} <- ensure_worker(key, recovered?: false),
              {:ok, updated} <- Store.get_session(key) do
           {:ok, updated}
@@ -246,7 +247,9 @@ defmodule Hivebeam.Gateway.SessionRouter do
   defp normalize_timeout(_value), do: 120_000
 
   defp maybe_put_bridge_module(opts, nil), do: opts
-  defp maybe_put_bridge_module(opts, module) when is_atom(module), do: Keyword.put(opts, :bridge_module, module)
+
+  defp maybe_put_bridge_module(opts, module) when is_atom(module),
+    do: Keyword.put(opts, :bridge_module, module)
 
   defp now_iso do
     DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()

@@ -18,7 +18,8 @@ defmodule Hivebeam.Gateway.Supervisor do
     children = [
       {Registry, keys: :unique, name: Hivebeam.Gateway.WorkerRegistry},
       {Registry, keys: :duplicate, name: Hivebeam.Gateway.EventRegistry},
-      {Store, [data_dir: Config.data_dir(), max_events_per_session: Config.max_events_per_session()]},
+      {Store,
+       [data_dir: Config.data_dir(), max_events_per_session: Config.max_events_per_session()]},
       {SessionSupervisor, []},
       {Server, []}
     ]

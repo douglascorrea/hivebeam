@@ -4,7 +4,9 @@ defmodule Hivebeam.Gateway.StoreTest do
   alias Hivebeam.Gateway.Store
 
   setup do
-    data_dir = Path.join(System.tmp_dir!(), "hivebeam_gateway_store_#{System.unique_integer([:positive])}")
+    data_dir =
+      Path.join(System.tmp_dir!(), "hivebeam_gateway_store_#{System.unique_integer([:positive])}")
+
     File.rm_rf!(data_dir)
     File.mkdir_p!(data_dir)
 
@@ -68,7 +70,10 @@ defmodule Hivebeam.Gateway.StoreTest do
     assert request.status == "queued"
 
     assert {:ok, updated} =
-             Store.update_request("hbs_test_b", "req-1", %{status: "completed", result: %{ok: true}})
+             Store.update_request("hbs_test_b", "req-1", %{
+               status: "completed",
+               result: %{ok: true}
+             })
 
     assert updated.status == "completed"
 
@@ -94,7 +99,8 @@ defmodule Hivebeam.Gateway.StoreTest do
     assert {:ok, _} = Store.upsert_session(session)
 
     for seq <- 1..8 do
-      assert {:ok, %{seq: ^seq}} = Store.append_event("hbs_test_c", "event_#{seq}", "gateway", %{})
+      assert {:ok, %{seq: ^seq}} =
+               Store.append_event("hbs_test_c", "event_#{seq}", "gateway", %{})
     end
 
     assert :ok = Store.prune_session_events("hbs_test_c")
