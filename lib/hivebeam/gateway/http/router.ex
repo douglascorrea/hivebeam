@@ -4,6 +4,19 @@ defmodule Hivebeam.Gateway.HTTP.Router do
 
   alias Hivebeam.Gateway.SessionRouter
 
+  @contract_routes [
+    {"GET", "/healthz"},
+    {"POST", "/v1/sessions"},
+    {"GET", "/v1/sessions/:gateway_session_key"},
+    {"POST", "/v1/sessions/:gateway_session_key/attach"},
+    {"POST", "/v1/sessions/:gateway_session_key/prompts"},
+    {"POST", "/v1/sessions/:gateway_session_key/cancel"},
+    {"GET", "/v1/sessions/:gateway_session_key/events"},
+    {"POST", "/v1/sessions/:gateway_session_key/approvals"},
+    {"DELETE", "/v1/sessions/:gateway_session_key"},
+    {"GET", "/v1/ws"}
+  ]
+
   plug(:match)
   plug(Hivebeam.Gateway.HTTP.Auth)
 
@@ -143,6 +156,9 @@ defmodule Hivebeam.Gateway.HTTP.Router do
   match _ do
     send_json(conn, 404, %{error: "not_found"})
   end
+
+  @spec contract_routes() :: [{String.t(), String.t()}]
+  def contract_routes, do: @contract_routes
 
   defp session_payload(session) do
     %{

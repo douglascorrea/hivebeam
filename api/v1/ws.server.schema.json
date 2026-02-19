@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hivebeam.dev/contracts/v1/ws.server.schema.json",
+  "title": "Hivebeam Gateway -> Client WS Frame",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "type": {"const": "attached"},
+        "gateway_session_key": {"type": "string"},
+        "replayed_count": {"type": "integer", "minimum": 0},
+        "next_after_seq": {"type": "integer", "minimum": 0},
+        "has_more": {"type": "boolean"}
+      },
+      "required": ["type", "gateway_session_key", "replayed_count", "next_after_seq", "has_more"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {"const": "ack"},
+        "action": {"type": "string", "enum": ["prompt", "cancel", "approval"]},
+        "data": {"type": "object", "additionalProperties": true}
+      },
+      "required": ["type", "action", "data"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {"const": "error"},
+        "error": {"type": "string"}
+      },
+      "required": ["type", "error"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {"const": "pong"}
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {"const": "event"},
+        "data": {"$ref": "#/definitions/event"}
+      },
+      "required": ["type", "data"],
+      "additionalProperties": false
+    }
+  ],
+  "definitions": {
+    "event": {
+      "type": "object",
+      "properties": {
+        "gateway_session_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "session_created",
+            "prompt_enqueued",
+            "prompt_started",
+            "prompt_completed",
+            "prompt_failed",
+            "approval_requested",
+            "approval_resolved",
+            "approval_timeout",
+            "cancel_requested",
+            "session_worker_stopped",
+            "session_closed",
+            "stream_start",
+            "stream_update",
+            "stream_status",
+            "stream_done",
+            "stream_error",
+            "stream_event",
+            "upstream_connected",
+            "upstream_disconnected",
+            "upstream_session_rotated",
+            "upstream_status_error",
+            "upstream_start_failed",
+            "upstream_command_invalid",
+            "session_recovered"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": ["gateway", "upstream"]
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": ["gateway_session_key", "seq", "ts", "kind", "source", "payload"],
+      "additionalProperties": false
+    }
+  }
+}

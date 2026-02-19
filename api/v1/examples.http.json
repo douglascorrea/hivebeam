@@ -1,0 +1,135 @@
+{
+  "requests": {
+    "create_session": {
+      "provider": "codex",
+      "cwd": "/tmp",
+      "approval_mode": "ask",
+      "client_session_ref": "my-chat-session"
+    },
+    "attach": {
+      "after_seq": 0,
+      "limit": 100
+    },
+    "prompt": {
+      "request_id": "req-1",
+      "text": "Hello gateway",
+      "timeout_ms": 120000
+    },
+    "approval": {
+      "approval_ref": "apr_0123456789abcdef",
+      "decision": "allow"
+    }
+  },
+  "responses": {
+    "session": {
+      "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+      "status": "connected",
+      "provider": "codex",
+      "created_at": "2026-02-19T12:00:00.000Z",
+      "last_seq": 42,
+      "upstream_session_id": "session-abc",
+      "connected": true,
+      "in_flight": false
+    },
+    "attach": {
+      "session": {
+        "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+        "status": "connected",
+        "provider": "codex",
+        "created_at": "2026-02-19T12:00:00.000Z",
+        "last_seq": 42,
+        "upstream_session_id": "session-abc",
+        "connected": true,
+        "in_flight": false
+      },
+      "events": [
+        {
+          "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+          "seq": 41,
+          "ts": "2026-02-19T12:00:01.000Z",
+          "kind": "stream_update",
+          "source": "upstream",
+          "payload": {
+            "event": "update",
+            "update": {
+              "type": "agent_message_chunk",
+              "text": "hello"
+            }
+          }
+        }
+      ],
+      "next_after_seq": 41,
+      "has_more": false
+    },
+    "prompt_ack": {
+      "accepted": true,
+      "request_id": "req-1",
+      "queued_position": 1,
+      "last_seq": 42
+    },
+    "cancel_ack": {
+      "accepted": true,
+      "last_seq": 43
+    },
+    "approval_ack": {
+      "accepted": true,
+      "last_seq": 44
+    },
+    "events_page": {
+      "events": [
+        {
+          "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+          "seq": 42,
+          "ts": "2026-02-19T12:00:02.000Z",
+          "kind": "prompt_completed",
+          "source": "gateway",
+          "payload": {
+            "request_id": "req-1",
+            "stop_reason": "done",
+            "session_id": "session-abc"
+          }
+        }
+      ],
+      "next_after_seq": 42,
+      "has_more": false
+    },
+    "close": {
+      "closed": true
+    },
+    "error_not_found": {
+      "error": "session_not_found"
+    }
+  },
+  "events": [
+    {
+      "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+      "seq": 1,
+      "ts": "2026-02-19T12:00:00.000Z",
+      "kind": "session_created",
+      "source": "gateway",
+      "payload": {
+        "provider": "codex"
+      }
+    },
+    {
+      "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+      "seq": 2,
+      "ts": "2026-02-19T12:00:01.000Z",
+      "kind": "prompt_completed",
+      "source": "gateway",
+      "payload": {
+        "request_id": "req-1"
+      }
+    },
+    {
+      "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+      "seq": 3,
+      "ts": "2026-02-19T12:00:02.000Z",
+      "kind": "stream_update",
+      "source": "upstream",
+      "payload": {
+        "event": "update"
+      }
+    }
+  ]
+}

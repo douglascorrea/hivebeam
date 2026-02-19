@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hivebeam.dev/contracts/v1/ws.client.schema.json",
+  "title": "Hivebeam Client -> Gateway WS Frame",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "type": {"const": "attach"},
+        "gateway_session_key": {"type": "string"},
+        "session_key": {"type": "string"},
+        "after_seq": {"type": "integer", "minimum": 0}
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {"const": "prompt"},
+        "request_id": {"type": "string", "minLength": 1},
+        "text": {"type": "string", "minLength": 1},
+        "timeout_ms": {"type": "integer", "minimum": 1}
+      },
+      "required": ["type", "request_id", "text"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {"const": "cancel"}
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {"const": "approval"},
+        "approval_ref": {"type": "string", "minLength": 1},
+        "decision": {"type": "string", "enum": ["allow", "deny"]}
+      },
+      "required": ["type", "approval_ref", "decision"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {"const": "ping"}
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    }
+  ]
+}

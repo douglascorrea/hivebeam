@@ -1,0 +1,581 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Hivebeam Gateway API",
+    "version": "1.0.0",
+    "description": "Contract for Hivebeam gateway HTTP endpoints (v1)."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8080",
+      "description": "Local default"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "summary": "Health check",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Gateway is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "ok"
+                    }
+                  },
+                  "required": ["status"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions": {
+      "post": {
+        "summary": "Create or recover a session",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{gateway_session_key}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/GatewaySessionKey"
+        }
+      ],
+      "get": {
+        "summary": "Get session snapshot",
+        "responses": {
+          "200": {
+            "description": "Session snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Close a session",
+        "responses": {
+          "200": {
+            "description": "Closed response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "closed": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["closed"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{gateway_session_key}/attach": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/GatewaySessionKey"
+        }
+      ],
+      "post": {
+        "summary": "Attach and replay events",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session + replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "session": {
+                      "$ref": "#/components/schemas/Session"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Event"
+                      }
+                    },
+                    "next_after_seq": {
+                      "type": "integer"
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["session", "events", "next_after_seq", "has_more"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{gateway_session_key}/prompts": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/GatewaySessionKey"
+        }
+      ],
+      "post": {
+        "summary": "Enqueue a prompt",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Prompt accepted/known",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "existing": {
+                      "type": "boolean"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "queued_position": {
+                      "type": "integer"
+                    },
+                    "last_seq": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["accepted", "request_id", "last_seq"],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{gateway_session_key}/cancel": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/GatewaySessionKey"
+        }
+      ],
+      "post": {
+        "summary": "Cancel in-flight prompt",
+        "responses": {
+          "200": {
+            "description": "Cancel response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "last_seq": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["accepted", "last_seq"],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{gateway_session_key}/approvals": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/GatewaySessionKey"
+        }
+      ],
+      "post": {
+        "summary": "Resolve approval request",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approval response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "last_seq": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["accepted", "last_seq"],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{gateway_session_key}/events": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/GatewaySessionKey"
+        },
+        {
+          "name": "after_seq",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "default": 0
+          }
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "default": 200
+          }
+        }
+      ],
+      "get": {
+        "summary": "Replay events",
+        "responses": {
+          "200": {
+            "description": "Event page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventsPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/ws": {
+      "get": {
+        "summary": "WebSocket stream endpoint",
+        "description": "HTTP upgrade endpoint for gateway realtime events. Requires Authorization header and supports query parameters gateway_session_key/session_key + after_seq.",
+        "responses": {
+          "101": {
+            "description": "Switching Protocols"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "token"
+      }
+    },
+    "parameters": {
+      "GatewaySessionKey": {
+        "name": "gateway_session_key",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error payload",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": ["error"],
+        "additionalProperties": true
+      },
+      "CreateSessionRequest": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["codex", "claude"]
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "approval_mode": {
+            "type": "string",
+            "enum": ["ask", "allow", "deny"]
+          },
+          "client_session_ref": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "AttachRequest": {
+        "type": "object",
+        "properties": {
+          "after_seq": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": true
+      },
+      "PromptRequest": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": ["request_id", "text"],
+        "additionalProperties": true
+      },
+      "ApprovalRequest": {
+        "type": "object",
+        "properties": {
+          "approval_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "decision": {
+            "type": "string",
+            "enum": ["allow", "deny"]
+          }
+        },
+        "required": ["approval_ref", "decision"],
+        "additionalProperties": true
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "gateway_session_key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seq": {
+            "type": "integer"
+          },
+          "upstream_session_id": {
+            "type": ["string", "null"]
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "in_flight": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "gateway_session_key",
+          "status",
+          "provider",
+          "created_at",
+          "last_seq",
+          "upstream_session_id",
+          "connected",
+          "in_flight"
+        ],
+        "additionalProperties": false
+      },
+      "Event": {
+        "$ref": "./event.schema.json"
+      },
+      "EventsPage": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "next_after_seq": {
+            "type": "integer"
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "required": ["events", "next_after_seq", "has_more"],
+        "additionalProperties": false
+      }
+    }
+  }
+}

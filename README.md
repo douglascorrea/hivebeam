@@ -79,3 +79,26 @@ Timeouts/retry:
 - `HIVEBEAM_CODEX_PROMPT_TIMEOUT_MS` (default `120000`)
 - `HIVEBEAM_CODEX_CONNECT_TIMEOUT_MS` (default `30000`)
 - `HIVEBEAM_ACP_RECONNECT_MS` (default `5000`)
+
+## API contracts
+
+Formal v1 protocol contracts are versioned in git under `api/v1/`:
+
+- `openapi.json` (HTTP contract)
+- `ws.client.schema.json` (WS client frames)
+- `ws.server.schema.json` (WS server frames)
+- `event.schema.json` (event envelope)
+- `examples.http.json` / `examples.ws.json` (validation fixtures)
+- `CONTRACT_VERSION` (contract artifact version)
+
+Release tags publish the same `api/v1/*` files as release assets (`api-v1/*`) so SDK CI can pin against tagged artifacts.
+
+### Contract versioning policy
+
+- Wire compatibility is anchored by route namespace major (`/v1`).
+- Breaking protocol changes require a new major namespace (`/v2`) and a new contract directory (`api/v2`).
+- Backward-compatible clarifications or additive updates may update `api/v1/CONTRACT_VERSION` without changing route major.
+
+### SDK compatibility matrix
+
+See the Elixir SDK matrix in `hivebeam-client-elixir/COMPATIBILITY.md` (or that repository root `COMPATIBILITY.md`) for SDK-to-contract support mapping.

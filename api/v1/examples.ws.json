@@ -1,0 +1,96 @@
+{
+  "client": [
+    {
+      "type": "attach",
+      "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+      "after_seq": 10
+    },
+    {
+      "type": "prompt",
+      "request_id": "req-1",
+      "text": "Hello gateway",
+      "timeout_ms": 120000
+    },
+    {
+      "type": "cancel"
+    },
+    {
+      "type": "approval",
+      "approval_ref": "apr_0123456789abcdef",
+      "decision": "allow"
+    },
+    {
+      "type": "ping"
+    }
+  ],
+  "server": [
+    {
+      "type": "attached",
+      "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+      "replayed_count": 3,
+      "next_after_seq": 13,
+      "has_more": false
+    },
+    {
+      "type": "ack",
+      "action": "prompt",
+      "data": {
+        "accepted": true,
+        "request_id": "req-1",
+        "last_seq": 14
+      }
+    },
+    {
+      "type": "error",
+      "error": "invalid_json"
+    },
+    {
+      "type": "pong"
+    },
+    {
+      "type": "event",
+      "data": {
+        "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+        "seq": 14,
+        "ts": "2026-02-19T12:00:02.000Z",
+        "kind": "stream_done",
+        "source": "upstream",
+        "payload": {
+          "event": "done"
+        }
+      }
+    }
+  ],
+  "events": [
+    {
+      "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+      "seq": 10,
+      "ts": "2026-02-19T12:00:00.000Z",
+      "kind": "prompt_enqueued",
+      "source": "gateway",
+      "payload": {
+        "request_id": "req-1"
+      }
+    },
+    {
+      "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+      "seq": 11,
+      "ts": "2026-02-19T12:00:01.000Z",
+      "kind": "approval_requested",
+      "source": "gateway",
+      "payload": {
+        "approval_ref": "apr_0123456789abcdef"
+      }
+    },
+    {
+      "gateway_session_key": "hbs_8c59f6b4e58f87db04cc4f570f7bc0a5",
+      "seq": 12,
+      "ts": "2026-02-19T12:00:02.000Z",
+      "kind": "stream_done",
+      "source": "upstream",
+      "payload": {
+        "event": "done"
+      }
+    }
+  ]
+}
