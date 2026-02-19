@@ -1,18 +1,21 @@
 defmodule Hivebeam.BridgeCatalog do
   @moduledoc false
 
-  @provider_specs [
-    %{provider: "codex", bridge_name: Hivebeam.CodexBridge},
-    %{provider: "claude", bridge_name: Hivebeam.ClaudeBridge}
-  ]
+  alias Hivebeam.CodexConfig
+
+  @providers ["codex", "claude"]
 
   @spec providers() :: [%{provider: String.t(), bridge_name: atom()}]
-  def providers, do: @provider_specs
+  def providers do
+    Enum.map(@providers, fn provider ->
+      %{provider: provider, bridge_name: CodexConfig.bridge_name(provider)}
+    end)
+  end
 
   @spec provider_specs_for(String.t() | atom() | [String.t() | atom()] | nil) ::
           [%{provider: String.t(), bridge_name: atom()}]
-  def provider_specs_for(nil), do: @provider_specs
-  def provider_specs_for([]), do: @provider_specs
+  def provider_specs_for(nil), do: providers()
+  def provider_specs_for([]), do: providers()
 
   def provider_specs_for(providers) when is_list(providers) do
     providers
@@ -32,7 +35,8 @@ defmodule Hivebeam.BridgeCatalog do
       |> String.trim()
       |> String.downcase()
 
-    Enum.filter(@provider_specs, &(&1.provider == normalized))
+    providers()
+    |> Enum.filter(&(&1.provider == normalized))
   end
 
   @spec target(node() | nil, atom()) :: map()

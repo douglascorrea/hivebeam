@@ -20,6 +20,65 @@ mix deps.get
 mix compile
 ```
 
+## Bridge Runtime
+
+Hivebeam now starts both ACP bridges by default on app boot:
+
+- `Hivebeam.CodexBridge`
+- `Hivebeam.ClaudeBridge`
+
+Bridge name overrides:
+
+- `HIVEBEAM_CODEX_BRIDGE_NAME` (default `Hivebeam.CodexBridge`)
+- `HIVEBEAM_CLAUDE_BRIDGE_NAME` (default `Hivebeam.ClaudeBridge`)
+
+Provider commands remain:
+
+- `HIVEBEAM_CODEX_ACP_CMD`
+- `HIVEBEAM_CLAUDE_AGENT_ACP_CMD`
+
+Provider-specific APIs are available:
+
+- `Hivebeam.Codex`
+- `Hivebeam.Claude`
+
+## Gateway Mode (Session Continuity v1)
+
+Hivebeam can run an HTTP/WebSocket gateway that keeps ACP sessions alive across client disconnects and supports event replay on reconnect.
+Gateway sessions route to provider-specific bridges (`provider=codex` -> `CodexBridge`, `provider=claude` -> `ClaudeBridge`).
+
+Run:
+
+```bash
+export HIVEBEAM_GATEWAY_ENABLED=1
+export HIVEBEAM_GATEWAY_TOKEN="replace-with-strong-token"
+mix hivebeam gateway run
+```
+
+Default bind is `0.0.0.0:8080` and gateway APIs are exposed under `/v1`.
+
+Main endpoints:
+
+- `POST /v1/sessions`
+- `GET /v1/sessions/:gateway_session_key`
+- `POST /v1/sessions/:gateway_session_key/attach`
+- `POST /v1/sessions/:gateway_session_key/prompts`
+- `POST /v1/sessions/:gateway_session_key/cancel`
+- `POST /v1/sessions/:gateway_session_key/approvals`
+- `GET /v1/sessions/:gateway_session_key/events?after_seq=<n>&limit=<n>`
+- `DELETE /v1/sessions/:gateway_session_key`
+- `GET /v1/ws?gateway_session_key=<key>&after_seq=<n>`
+
+Gateway configuration:
+
+- `HIVEBEAM_GATEWAY_ENABLED` (`0` default)
+- `HIVEBEAM_GATEWAY_BIND` (`0.0.0.0:8080` default)
+- `HIVEBEAM_GATEWAY_TOKEN` (required when enabled)
+- `HIVEBEAM_GATEWAY_DATA_DIR` (`~/.config/hivebeam/gateway` default)
+- `HIVEBEAM_GATEWAY_MAX_EVENTS_PER_SESSION` (`50000` default)
+- `HIVEBEAM_GATEWAY_RECONNECT_MS` (`2000` default)
+- `HIVEBEAM_GATEWAY_APPROVAL_TIMEOUT_MS` (`120000` default)
+
 ## DX defaults
 
 - Remote runtime path default: `~/.local/hivebeam/current`
@@ -84,6 +143,13 @@ mix hivebeam targets ls --targets host:hetzner
 
 # 5) Open chat against that host's nodes
 mix hivebeam chat --targets host:hetzner
+```
+
+Note: on a fresh remote, first `node.up` may spend 30-90s running `mix deps.get`/`mix compile`.
+If chat is started immediately, wait for the remote log line `Distributed node started as ...`:
+
+```bash
+ssh hetzner-douglas 'tail -f ~/.local/hivebeam/current/.hivebeam/nodes/edge1.log'
 ```
 
 Add another node on same host:

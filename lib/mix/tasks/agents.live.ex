@@ -42,6 +42,8 @@ defmodule Mix.Tasks.Agents.Live do
 
   @discovery_attempts 15
   @discovery_delay_ms 200
+  @connect_attempts 180
+  @connect_delay_ms 500
 
   @impl Mix.Task
   def run(args) do
@@ -376,11 +378,32 @@ defmodule Mix.Tasks.Agents.Live do
 
   defp connect_remote_targets!(nodes) do
     Enum.each(nodes, fn node ->
-      case Node.ping(node) do
-        :pong -> Mix.shell().info("Connected to #{node}")
-        :pang -> Mix.raise("Could not connect to remote node #{node}")
+      case wait_for_remote_node(node, @connect_attempts) do
+        :ok ->
+          Mix.shell().info("Connected to #{node}")
+
+        {:error, :timeout} ->
+          Mix.raise("""
+          Could not connect to remote node #{node}.
+          The node may still be compiling/booting on first run.
+          Check remote log and retry in a few seconds:
+            tail -f ~/.local/hivebeam/current/.hivebeam/nodes/<name>.log
+          """)
       end
     end)
+  end
+
+  defp wait_for_remote_node(_node, 0), do: {:error, :timeout}
+
+  defp wait_for_remote_node(node, attempts_left) do
+    case Node.ping(node) do
+      :pong ->
+        :ok
+
+      :pang ->
+        Process.sleep(@connect_delay_ms)
+        wait_for_remote_node(node, attempts_left - 1)
+    end
   end
 
   defp detect_host_ip do

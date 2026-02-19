@@ -10,7 +10,11 @@ defmodule Hivebeam.Test.FakeAcpStore do
 
   def stop do
     if pid = Process.whereis(__MODULE__) do
-      Agent.stop(pid)
+      try do
+        Agent.stop(pid)
+      catch
+        :exit, _ -> :ok
+      end
     end
   end
 

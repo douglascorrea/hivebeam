@@ -3,6 +3,7 @@ defmodule Hivebeam.Application do
   use Application
 
   alias Hivebeam.CodexConfig
+  alias Hivebeam.Gateway.Config, as: GatewayConfig
 
   @impl true
   def start(_type, _args) do
@@ -11,7 +12,8 @@ defmodule Hivebeam.Application do
         {Hivebeam.ClusterConnector, []}
       ]
       |> maybe_add_libcluster()
-      |> Kernel.++([{Hivebeam.CodexBridge, []}])
+      |> Kernel.++([{Hivebeam.CodexBridge, []}, {Hivebeam.ClaudeBridge, []}])
+      |> maybe_add_gateway()
 
     opts = [strategy: :one_for_one, name: Hivebeam.Supervisor]
     Supervisor.start_link(children, opts)
@@ -25,6 +27,14 @@ defmodule Hivebeam.Application do
       children ++ [{Cluster.Supervisor, [topologies, [name: Hivebeam.ClusterSupervisor]]}]
     else
       _ -> children
+    end
+  end
+
+  defp maybe_add_gateway(children) do
+    if GatewayConfig.enabled?() do
+      children ++ [{Hivebeam.Gateway.Supervisor, []}]
+    else
+      children
     end
   end
 end

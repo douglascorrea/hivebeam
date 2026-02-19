@@ -101,7 +101,11 @@ defmodule Hivebeam.NodeOrchestrator do
 
   @spec down(keyword()) :: {:ok, runtime(), String.t()} | {:error, term()}
   def down(opts) do
-    with {:ok, runtime} <- build_runtime(Keyword.put_new(opts, :hydrate_metadata, true)),
+    with {:ok, runtime} <-
+           opts
+           |> Keyword.put_new(:hydrate_metadata, true)
+           |> Keyword.put_new(:hydrate_inventory, true)
+           |> build_runtime(),
          :ok <- ensure_remote_path(runtime),
          :ok <- ensure_compose_file_if_needed(runtime),
          {:ok, output} <- run_down(runtime) do
@@ -126,7 +130,11 @@ defmodule Hivebeam.NodeOrchestrator do
         end
 
       _name ->
-        with {:ok, runtime} <- build_runtime(Keyword.put_new(opts, :hydrate_metadata, true)),
+        with {:ok, runtime} <-
+               opts
+               |> Keyword.put_new(:hydrate_metadata, true)
+               |> Keyword.put_new(:hydrate_inventory, true)
+               |> build_runtime(),
              :ok <- ensure_remote_path(runtime),
              :ok <- ensure_compose_file_if_needed(runtime),
              result <- inspect_one(runtime) do
@@ -144,7 +152,7 @@ defmodule Hivebeam.NodeOrchestrator do
     with {:ok, name} <- required_string(opts, :name) do
       opts =
         opts
-        |> maybe_hydrate_inventory(name, hydrate_inventory? or hydrate_metadata?)
+        |> maybe_hydrate_inventory(name, hydrate_inventory?)
         |> maybe_hydrate_runtime_metadata(cwd, name, hydrate_metadata?)
 
       slot = normalize_slot(Keyword.get(opts, :slot), name)

@@ -11,6 +11,7 @@ defmodule Hivebeam.CodexConfig do
   @default_prompt_timeout_ms 120_000
   @default_connect_timeout_ms 30_000
   @default_bridge_name Hivebeam.CodexBridge
+  @default_claude_bridge_name Hivebeam.ClaudeBridge
   @default_discovery_mode "hybrid"
 
   @spec acp_provider() :: String.t()
@@ -190,19 +191,42 @@ defmodule Hivebeam.CodexConfig do
   def bridge_name do
     nil
     |> env("HIVEBEAM_CODEX_BRIDGE_NAME")
-    |> parse_bridge_name()
+    |> parse_bridge_name(@default_bridge_name)
+  end
+
+  @spec claude_bridge_name() :: atom()
+  def claude_bridge_name do
+    nil
+    |> env("HIVEBEAM_CLAUDE_BRIDGE_NAME")
+    |> parse_bridge_name(@default_claude_bridge_name)
+  end
+
+  @spec bridge_name(String.t() | atom()) :: atom()
+  def bridge_name(provider) when is_atom(provider) do
+    provider
+    |> Atom.to_string()
+    |> bridge_name()
+  end
+
+  def bridge_name(provider) when is_binary(provider) do
+    case provider |> String.trim() |> String.downcase() do
+      "claude" -> claude_bridge_name()
+      _ -> bridge_name()
+    end
   end
 
   @spec parse_bridge_name(String.t() | atom() | nil) :: atom()
-  def parse_bridge_name(nil), do: @default_bridge_name
-  def parse_bridge_name(name) when is_atom(name), do: name
+  def parse_bridge_name(name), do: parse_bridge_name(name, @default_bridge_name)
 
-  def parse_bridge_name(name) when is_binary(name) do
+  defp parse_bridge_name(nil, default), do: default
+  defp parse_bridge_name(name, _default) when is_atom(name), do: name
+
+  defp parse_bridge_name(name, default) when is_binary(name) do
     value = String.trim(name)
 
     cond do
       value == "" ->
-        @default_bridge_name
+        default
 
       String.starts_with?(value, ":") ->
         value

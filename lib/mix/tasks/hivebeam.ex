@@ -24,6 +24,9 @@ defmodule Mix.Tasks.Hivebeam do
       ["chat" | rest] ->
         run_chat(rest)
 
+      ["gateway", "run" | rest] ->
+        run_gateway(rest)
+
       _ ->
         print_help()
     end
@@ -154,6 +157,11 @@ defmodule Mix.Tasks.Hivebeam do
     Mix.Tasks.Agents.Live.run(["--chat" | normalized])
   end
 
+  defp run_gateway(args) do
+    Mix.Task.reenable("hivebeam.gateway.run")
+    Mix.Tasks.Hivebeam.Gateway.Run.run(args)
+  end
+
   defp split_csv(value) do
     value
     |> String.split(",")
@@ -182,6 +190,7 @@ defmodule Mix.Tasks.Hivebeam do
       mix hivebeam discover sync [--targets all|host:<alias>|tag:<tag>|provider:<name>|state:<state>]
       mix hivebeam targets ls [--targets ...]
       mix hivebeam chat [--targets ...] [other agents.live flags]
+      mix hivebeam gateway run [--bind 0.0.0.0:8080] [--token <token>] [--data-dir <path>]
     """)
   end
 end

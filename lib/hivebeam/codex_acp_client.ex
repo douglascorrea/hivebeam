@@ -1,18 +1,9 @@
 defmodule Hivebeam.CodexAcpClient do
   @moduledoc false
-  @behaviour ACPex.Client
+  @behaviour Hivebeam.Acp.ClientHandler
 
   require Logger
 
-  alias ACPex.Schema.Client.{FsReadTextFileRequest, FsReadTextFileResponse}
-  alias ACPex.Schema.Client.{FsWriteTextFileRequest, FsWriteTextFileResponse}
-  alias ACPex.Schema.Client.Terminal.{CreateRequest, CreateResponse}
-  alias ACPex.Schema.Client.Terminal.{KillRequest, KillResponse}
-  alias ACPex.Schema.Client.Terminal.{OutputRequest, OutputResponse}
-  alias ACPex.Schema.Client.Terminal.{ReleaseRequest, ReleaseResponse}
-  alias ACPex.Schema.Client.Terminal.{WaitForExitRequest, WaitForExitResponse}
-  alias ACPex.Schema.Session.UpdateNotification
-  alias Hivebeam.AcpRequestPermissionResponse
   alias Hivebeam.CodexBridge
 
   @default_approval_timeout_ms 120_000
@@ -33,27 +24,20 @@ defmodule Hivebeam.CodexAcpClient do
   end
 
   @impl true
-  def handle_session_update(%UpdateNotification{} = notification, state) do
+  def handle_notification("session/update", params, state) when is_map(params) do
+    notification = %{
+      session_id: fetch(params, :session_id) || fetch(params, :sessionId),
+      update: fetch(params, :update)
+    }
+
     send(state.bridge, {:acp_session_update, notification})
     {:noreply, state}
   end
 
+  def handle_notification(_method, _params, state), do: {:noreply, state}
+
   @impl true
-  def handle_info({:terminal_finished, _terminal_id, _result} = message, state) do
-    {:noreply, handle_terminal_message(message, state)}
-  end
-
-  def handle_info({:DOWN, ref, :process, _pid, _reason} = message, state)
-      when is_map_key(state.terminal_monitors, ref) do
-    {:noreply, handle_terminal_message(message, state)}
-  end
-
-  def handle_info(_message, state), do: {:noreply, state}
-
-  # ACP v0.9+ permission requests for tool executions and similar actions.
-  # We bridge this into our existing approval flow and map the yes/no decision
-  # to one of the option IDs provided by the agent.
-  def handle_session_request_permission(request, state) when is_map(request) do
+  def handle_request("session/request_permission", request, state) when is_map(request) do
     state = drain_terminal_messages(state)
     options = permission_options(request)
 
@@ -81,66 +65,64 @@ defmodule Hivebeam.CodexAcpClient do
           cancelled_permission_outcome()
       end
 
-    {:ok, %AcpRequestPermissionResponse{outcome: outcome}, state}
+    {:ok, %{"outcome" => outcome}, state}
   end
 
-  @impl true
-  def handle_fs_read_text_file(%FsReadTextFileRequest{} = request, state) do
+  def handle_request("fs/read_text_file", request, state) when is_map(request) do
     state = drain_terminal_messages(state)
-    path = resolve_path(request.path, state.tool_cwd)
+    path = resolve_path(fetch(request, :path), state.tool_cwd)
+    line = fetch(request, :line)
+    limit = fetch(request, :limit)
 
     with :ok <- ensure_approved(state, "fs/read_text_file", %{path: path}),
          {:ok, content} <- File.read(path) do
-      content = apply_line_limit(content, request.line, request.limit)
-      {:ok, %FsReadTextFileResponse{content: content}, state}
+      content = apply_line_limit(content, line, limit)
+      {:ok, %{"content" => content}, state}
     else
       {:error, reason} when is_map(reason) -> {:error, reason, state}
       {:error, reason} -> {:error, io_error("fs/read_text_file failed", reason), state}
     end
   end
 
-  @impl true
-  def handle_fs_write_text_file(%FsWriteTextFileRequest{} = request, state) do
+  def handle_request("fs/write_text_file", request, state) when is_map(request) do
     state = drain_terminal_messages(state)
-    path = resolve_path(request.path, state.tool_cwd)
+    path = resolve_path(fetch(request, :path), state.tool_cwd)
+    content = fetch(request, :content) || ""
 
     with :ok <- ensure_approved(state, "fs/write_text_file", %{path: path}),
          :ok <- ensure_parent_dir(path),
-         :ok <- File.write(path, request.content) do
-      {:ok, %FsWriteTextFileResponse{}, state}
+         :ok <- File.write(path, content) do
+      {:ok, %{}, state}
     else
       {:error, reason} when is_map(reason) -> {:error, reason, state}
       {:error, reason} -> {:error, io_error("fs/write_text_file failed", reason), state}
     end
   end
 
-  @impl true
-  def handle_terminal_create(%CreateRequest{} = request, state) do
+  def handle_request("terminal/create", request, state) when is_map(request) do
     state = drain_terminal_messages(state)
 
     cwd =
-      case request.cwd do
+      case fetch(request, :cwd) do
         value when is_binary(value) and value != "" -> resolve_path(value, state.tool_cwd)
         _ -> state.tool_cwd
       end
 
-    args = request.args || []
+    command = fetch(request, :command)
+    args = fetch(request, :args) |> List.wrap()
 
-    with :ok <-
-           ensure_approved(state, "terminal/create", %{
-             command: request.command,
-             args: args,
-             cwd: cwd
-           }) do
+    with true <- is_binary(command) and command != "",
+         :ok <-
+           ensure_approved(state, "terminal/create", %{command: command, args: args, cwd: cwd}) do
       terminal_id = "term-" <> Integer.to_string(System.unique_integer([:positive]))
-      env_pairs = normalize_env(request.env)
-      output_limit = request.output_byte_limit || @default_terminal_output_limit
+      env_pairs = normalize_env(fetch(request, :env))
+      output_limit = fetch(request, :output_byte_limit) || fetch(request, :outputByteLimit) || @default_terminal_output_limit
 
       owner = self()
 
       {worker_pid, monitor_ref} =
         spawn_monitor(fn ->
-          result = run_terminal_command(request.command, args, cwd, env_pairs, output_limit)
+          result = run_terminal_command(command, args, cwd, env_pairs, output_limit)
           send(owner, {:terminal_finished, terminal_id, result})
         end)
 
@@ -159,22 +141,22 @@ defmodule Hivebeam.CodexAcpClient do
         |> put_terminal(terminal_id, terminal)
         |> put_terminal_monitor(monitor_ref, terminal_id)
 
-      {:ok, %CreateResponse{terminal_id: terminal_id}, new_state}
+      {:ok, %{"terminalId" => terminal_id}, new_state}
     else
+      false -> {:error, %{code: -32_001, message: "terminal/create requires command"}, state}
       {:error, reason} when is_map(reason) -> {:error, reason, state}
       {:error, reason} -> {:error, io_error("terminal/create failed", reason), state}
     end
   end
 
-  @impl true
-  def handle_terminal_output(%OutputRequest{} = request, state) do
+  def handle_request("terminal/output", request, state) when is_map(request) do
     state = drain_terminal_messages(state)
 
-    with {:ok, terminal} <- fetch_terminal(state, request.terminal_id) do
-      response = %OutputResponse{
-        output: terminal.output,
-        truncated: terminal.truncated,
-        exit_status: terminal_exit_status(terminal)
+    with {:ok, terminal} <- fetch_terminal(state, fetch(request, :terminal_id) || fetch(request, :terminalId)) do
+      response = %{
+        "output" => terminal.output,
+        "truncated" => terminal.truncated,
+        "exitStatus" => terminal_exit_status(terminal)
       }
 
       {:ok, response, state}
@@ -183,14 +165,14 @@ defmodule Hivebeam.CodexAcpClient do
     end
   end
 
-  @impl true
-  def handle_terminal_wait_for_exit(%WaitForExitRequest{} = request, state) do
+  def handle_request("terminal/wait_for_exit", request, state) when is_map(request) do
     state = drain_terminal_messages(state)
+    terminal_id = fetch(request, :terminal_id) || fetch(request, :terminalId)
 
-    with {:ok, _terminal} <- fetch_terminal(state, request.terminal_id),
+    with {:ok, _terminal} <- fetch_terminal(state, terminal_id),
          {:ok, terminal, new_state} <-
-           wait_for_terminal_exit(state, request.terminal_id, @terminal_wait_timeout_ms) do
-      response = %WaitForExitResponse{exit_code: terminal.exit_code, signal: terminal.signal}
+           wait_for_terminal_exit(state, terminal_id, @terminal_wait_timeout_ms) do
+      response = %{"exitCode" => terminal.exit_code, "signal" => terminal.signal}
       {:ok, response, new_state}
     else
       {:error, reason, new_state} -> {:error, reason, new_state}
@@ -198,48 +180,62 @@ defmodule Hivebeam.CodexAcpClient do
     end
   end
 
-  @impl true
-  def handle_terminal_kill(%KillRequest{} = request, state) do
+  def handle_request("terminal/kill", request, state) when is_map(request) do
     state = drain_terminal_messages(state)
+    terminal_id = fetch(request, :terminal_id) || fetch(request, :terminalId)
 
-    with {:ok, terminal} <- fetch_terminal(state, request.terminal_id),
-         :ok <- ensure_approved(state, "terminal/kill", %{terminal_id: request.terminal_id}) do
-      if not terminal.done? and is_pid(terminal.worker_pid) and
-           Process.alive?(terminal.worker_pid) do
+    with {:ok, terminal} <- fetch_terminal(state, terminal_id),
+         :ok <- ensure_approved(state, "terminal/kill", %{terminal_id: terminal_id}) do
+      if not terminal.done? and is_pid(terminal.worker_pid) and Process.alive?(terminal.worker_pid) do
         Process.exit(terminal.worker_pid, :kill)
       end
 
       new_state =
-        complete_terminal(state, request.terminal_id, %{
+        complete_terminal(state, terminal_id, %{
           output: terminal.output,
           truncated: terminal.truncated,
           exit_code: terminal.exit_code,
           signal: terminal.signal || "SIGKILL"
         })
 
-      {:ok, %KillResponse{}, new_state}
+      {:ok, %{}, new_state}
     else
       {:error, reason} when is_map(reason) -> {:error, reason, state}
       {:error, reason} -> {:error, io_error("terminal/kill failed", reason), state}
     end
   end
 
-  @impl true
-  def handle_terminal_release(%ReleaseRequest{} = request, state) do
+  def handle_request("terminal/release", request, state) when is_map(request) do
     state = drain_terminal_messages(state)
+    terminal_id = fetch(request, :terminal_id) || fetch(request, :terminalId)
 
-    with {:ok, terminal} <- fetch_terminal(state, request.terminal_id) do
-      if not terminal.done? and is_pid(terminal.worker_pid) and
-           Process.alive?(terminal.worker_pid) do
+    with {:ok, terminal} <- fetch_terminal(state, terminal_id) do
+      if not terminal.done? and is_pid(terminal.worker_pid) and Process.alive?(terminal.worker_pid) do
         Process.exit(terminal.worker_pid, :kill)
       end
 
-      new_state = delete_terminal(state, request.terminal_id, terminal.monitor_ref)
-      {:ok, %ReleaseResponse{}, new_state}
+      new_state = delete_terminal(state, terminal_id, terminal.monitor_ref)
+      {:ok, %{}, new_state}
     else
       {:error, reason} -> {:error, reason, state}
     end
   end
+
+  def handle_request(_method, _params, state) do
+    {:error, %{code: -32_601, message: "method not found"}, state}
+  end
+
+  @impl true
+  def handle_info({:terminal_finished, _terminal_id, _result} = message, state) do
+    {:noreply, handle_terminal_message(message, state)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason} = message, state)
+      when is_map_key(state.terminal_monitors, ref) do
+    {:noreply, handle_terminal_message(message, state)}
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
 
   defp default_approval(request, state) do
     CodexBridge.request_tool_approval(request,
@@ -254,10 +250,10 @@ defmodule Hivebeam.CodexAcpClient do
         :ok
 
       :deny ->
-        {:error, %{code: -32003, message: "#{operation} denied by approval policy"}}
+        {:error, %{code: -32_003, message: "#{operation} denied by approval policy"}}
 
       :cancelled ->
-        {:error, %{code: -32003, message: "#{operation} approval cancelled"}}
+        {:error, %{code: -32_003, message: "#{operation} approval cancelled"}}
     end
   end
 
@@ -428,9 +424,8 @@ defmodule Hivebeam.CodexAcpClient do
     |> File.mkdir_p()
   end
 
-  defp resolve_path(path, cwd) do
-    Path.expand(path, cwd)
-  end
+  defp resolve_path(path, cwd) when is_binary(path), do: Path.expand(path, cwd)
+  defp resolve_path(_path, cwd), do: cwd
 
   defp apply_line_limit(content, nil, nil), do: content
 
@@ -456,8 +451,8 @@ defmodule Hivebeam.CodexAcpClient do
   defp normalize_env(env) when is_list(env) do
     env
     |> Enum.reduce([], fn item, acc ->
-      name = item["name"] || item[:name]
-      value = item["value"] || item[:value]
+      name = fetch(item, :name)
+      value = fetch(item, :value)
 
       if is_binary(name) do
         [{name, to_string(value || "")} | acc]
@@ -548,7 +543,8 @@ defmodule Hivebeam.CodexAcpClient do
 
         if now >= deadline do
           {:error,
-           %{code: -32002, message: "terminal/wait_for_exit timed out for #{terminal_id}"}, state}
+           %{code: -32_002, message: "terminal/wait_for_exit timed out for #{terminal_id}"},
+           state}
         else
           wait_for_more_terminal_events(state, terminal_id, deadline)
         end
@@ -636,7 +632,7 @@ defmodule Hivebeam.CodexAcpClient do
   defp fetch_terminal(state, terminal_id) do
     case Map.fetch(state.terminals, terminal_id) do
       {:ok, terminal} -> {:ok, terminal}
-      :error -> {:error, %{code: -32001, message: "terminal not found: #{terminal_id}"}}
+      :error -> {:error, %{code: -32_001, message: "terminal not found: #{terminal_id}"}}
     end
   end
 
@@ -681,7 +677,7 @@ defmodule Hivebeam.CodexAcpClient do
   end
 
   defp io_error(message, reason) do
-    %{code: -32001, message: "#{message}: #{inspect(reason)}"}
+    %{code: -32_001, message: "#{message}: #{inspect(reason)}"}
   end
 
   defp fetch(map, key) when is_map(map) and is_atom(key) do

@@ -34,9 +34,9 @@ defmodule Hivebeam.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:acpex, path: "vendor/acpex"},
       {:term_ui, git: "https://github.com/pcharbon70/term_ui.git"},
-      {:libcluster, "~> 3.5"}
+      {:libcluster, "~> 3.5"},
+      {:plug_cowboy, "~> 2.7"}
     ]
   end
 end
