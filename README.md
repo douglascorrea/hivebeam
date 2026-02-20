@@ -175,7 +175,7 @@ Detailed gateway support matrix and architecture recommendations:
 
 - [ ] Expand client sdk to support gateway admin operations (audit logs, SLO metrics, etc)
 - [ ] Add a gateway console to monitor audit logs and SLO metrics - via separated app that uses the client sdk
-- [ ] Editor tools: diffs, file operations, terminal, etc
+- [ ] Editor tools: diffs, file operations, terminal, etc (gateway and clients)
 - [ ] Implement web ui to operate agents via gateway
 - [ ] Implement gateway admin operations security
 - [ ] Stabilize tests, permissions, sandbox enforcement, CI, Enforce sandbox, approvals, terminal sandbox, policies, etc
