@@ -2,6 +2,7 @@ defmodule Hivebeam.Gateway.PolicyGate do
   @moduledoc false
 
   alias Hivebeam.Gateway.Config
+  alias Hivebeam.TerminalSandbox
 
   @email_regex ~r/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
   @ssn_regex ~r/\b\d{3}-\d{2}-\d{4}\b/
@@ -104,7 +105,9 @@ defmodule Hivebeam.Gateway.PolicyGate do
       session_key: fetch(session, :gateway_session_key),
       sandbox_roots: normalize_roots(fetch(session, :sandbox_roots), fetch(session, :cwd)),
       dangerously: normalize_dangerously(fetch(session, :dangerously)),
-      provider: fetch(session, :provider)
+      provider: fetch(session, :provider),
+      terminal_sandbox_mode: Config.terminal_sandbox_mode(),
+      terminal_sandbox_backend: :auto
     }
 
     evaluate_tool("tool_request", context, operation, details)
@@ -119,7 +122,12 @@ defmodule Hivebeam.Gateway.PolicyGate do
       session_key: fetch(context, :session_key),
       sandbox_roots: normalize_roots(fetch(context, :sandbox_roots), fetch(context, :tool_cwd)),
       dangerously: normalize_dangerously(fetch(context, :dangerously)),
-      provider: fetch(context, :provider)
+      provider: fetch(context, :provider),
+      terminal_sandbox_mode:
+        normalize_terminal_sandbox_mode(
+          fetch(context, :terminal_sandbox_mode) || Config.terminal_sandbox_mode()
+        ),
+      terminal_sandbox_backend: fetch(context, :terminal_sandbox_backend) || :auto
     }
 
     evaluate_tool("tool_operation", normalized_context, normalize_operation(operation), details)
@@ -136,6 +144,19 @@ defmodule Hivebeam.Gateway.PolicyGate do
             reason: "operation_not_allowed",
             operation: operation,
             allowlist: allowlist
+          }
+
+        operation == "terminal/create" and
+            not TerminalSandbox.terminal_create_allowed?(
+              dangerously: context.dangerously,
+              mode: context.terminal_sandbox_mode,
+              backend: context.terminal_sandbox_backend
+            ) ->
+          %{
+            reason: "terminal_disabled_in_sandbox",
+            operation: operation,
+            mode: TerminalSandbox.mode_label(context.terminal_sandbox_mode),
+            backend: TerminalSandbox.backend_label(context.terminal_sandbox_backend)
           }
 
         context.dangerously ->
@@ -324,6 +345,21 @@ defmodule Hivebeam.Gateway.PolicyGate do
   end
 
   defp normalize_dangerously(_value), do: false
+
+  defp normalize_terminal_sandbox_mode(value) when value in [:required, :best_effort, :off],
+    do: value
+
+  defp normalize_terminal_sandbox_mode(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "required" -> :required
+      "best_effort" -> :best_effort
+      "best-effort" -> :best_effort
+      "off" -> :off
+      _ -> Config.terminal_sandbox_mode()
+    end
+  end
+
+  defp normalize_terminal_sandbox_mode(_value), do: Config.terminal_sandbox_mode()
 
   defp normalize_operation(operation) when is_binary(operation) do
     case String.trim(operation) do

@@ -7,6 +7,7 @@ defmodule Hivebeam.AcpClient do
   alias Hivebeam.CodexBridge
   alias Hivebeam.Gateway.Config
   alias Hivebeam.Gateway.PolicyGate
+  alias Hivebeam.TerminalSandbox
 
   @default_approval_timeout_ms 120_000
   @default_terminal_output_limit 200_000
@@ -29,6 +30,25 @@ defmodule Hivebeam.AcpClient do
       |> Keyword.get(:sandbox_default_root, tool_cwd)
       |> normalize_sandbox_default_root(tool_cwd, sandbox_roots)
 
+    dangerously =
+      args
+      |> Keyword.get(:dangerously, Config.sandbox_dangerously_enabled?())
+      |> normalize_dangerously()
+
+    terminal_sandbox_mode =
+      args
+      |> Keyword.get(:terminal_sandbox_mode, Config.terminal_sandbox_mode())
+      |> normalize_terminal_sandbox_mode()
+
+    terminal_sandbox_backend = Keyword.get(args, :terminal_sandbox_backend, :auto)
+
+    terminal_capability =
+      TerminalSandbox.terminal_capability_enabled?(
+        dangerously: dangerously,
+        mode: terminal_sandbox_mode,
+        backend: terminal_sandbox_backend
+      )
+
     {:ok,
      %{
        bridge: Keyword.fetch!(args, :bridge),
@@ -37,10 +57,10 @@ defmodule Hivebeam.AcpClient do
        tool_cwd: tool_cwd,
        sandbox_roots: sandbox_roots,
        sandbox_default_root: sandbox_default_root,
-       dangerously:
-         args
-         |> Keyword.get(:dangerously, Config.sandbox_dangerously_enabled?())
-         |> normalize_dangerously(),
+       dangerously: dangerously,
+       terminal_sandbox_mode: terminal_sandbox_mode,
+       terminal_sandbox_backend: terminal_sandbox_backend,
+       terminal_capability: terminal_capability,
        approval_timeout_ms: Keyword.get(args, :approval_timeout_ms, @default_approval_timeout_ms),
        approval_fun: Keyword.get(args, :approval_fun, &default_approval/2),
        terminals: %{},
@@ -141,6 +161,7 @@ defmodule Hivebeam.AcpClient do
     args = fetch(request, :args) |> List.wrap()
 
     with true <- is_binary(command) and command != "",
+         :ok <- ensure_terminal_capability(state),
          :ok <-
            ensure_policy_allows_tool(state, "terminal/create", %{
              command: command,
@@ -161,7 +182,7 @@ defmodule Hivebeam.AcpClient do
 
       {worker_pid, monitor_ref} =
         spawn_monitor(fn ->
-          result = run_terminal_command(command, args, cwd, env_pairs, output_limit)
+          result = run_terminal_command(command, args, cwd, env_pairs, output_limit, state)
           send(owner, {:terminal_finished, terminal_id, result})
         end)
 
@@ -306,7 +327,9 @@ defmodule Hivebeam.AcpClient do
       provider: state.provider,
       tool_cwd: state.tool_cwd,
       sandbox_roots: state.sandbox_roots,
-      dangerously: state.dangerously
+      dangerously: state.dangerously,
+      terminal_sandbox_mode: state.terminal_sandbox_mode,
+      terminal_sandbox_backend: state.terminal_sandbox_backend
     }
 
     case PolicyGate.evaluate_tool_operation(context, operation, details) do
@@ -357,8 +380,8 @@ defmodule Hivebeam.AcpClient do
   defp sandbox_policy_reason?(details) when is_map(details) do
     reason = fetch(details, :reason)
 
-    reason in ["sandbox_violation", :sandbox_violation] or Map.has_key?(details, :allowed_roots) or
-      Map.has_key?(details, "allowed_roots")
+    reason in ["sandbox_violation", :sandbox_violation, "terminal_disabled_in_sandbox"] or
+      Map.has_key?(details, :allowed_roots) or Map.has_key?(details, "allowed_roots")
   end
 
   defp sandbox_policy_reason?(_details), do: false
@@ -587,35 +610,53 @@ defmodule Hivebeam.AcpClient do
 
   defp normalize_env(_), do: []
 
-  defp run_terminal_command(command, args, cwd, env_pairs, output_limit) do
+  defp run_terminal_command(command, args, cwd, env_pairs, output_limit, state) do
     options =
       [stderr_to_stdout: true, cd: cwd]
       |> maybe_put_env(env_pairs)
 
-    try do
-      {output, exit_code} = System.cmd(command, args, options)
-      {output, truncated} = truncate_output(output, output_limit)
+    case TerminalSandbox.wrap_command(command, args,
+           dangerously: state.dangerously,
+           sandbox_roots: state.sandbox_roots,
+           mode: state.terminal_sandbox_mode,
+           backend: state.terminal_sandbox_backend
+         ) do
+      {:ok, exec_command, exec_args} ->
+        try do
+          {output, exit_code} = System.cmd(exec_command, exec_args, options)
+          {output, truncated} = truncate_output(output, output_limit)
 
-      %{
-        output: output,
-        truncated: truncated,
-        exit_code: exit_code,
-        signal: nil
-      }
-    rescue
-      error ->
-        {output, truncated} = truncate_output(Exception.message(error), output_limit)
+          %{
+            output: output,
+            truncated: truncated,
+            exit_code: exit_code,
+            signal: nil
+          }
+        rescue
+          error ->
+            {output, truncated} = truncate_output(Exception.message(error), output_limit)
 
-        %{
-          output: output,
-          truncated: truncated,
-          exit_code: 127,
-          signal: nil
-        }
-    catch
-      kind, reason ->
-        {output, truncated} =
-          truncate_output("terminal execution #{kind}: #{inspect(reason)}", output_limit)
+            %{
+              output: output,
+              truncated: truncated,
+              exit_code: 127,
+              signal: nil
+            }
+        catch
+          kind, reason ->
+            {output, truncated} =
+              truncate_output("terminal execution #{kind}: #{inspect(reason)}", output_limit)
+
+            %{
+              output: output,
+              truncated: truncated,
+              exit_code: 1,
+              signal: nil
+            }
+        end
+
+      {:error, reason} ->
+        {output, truncated} = truncate_output(inspect(reason), output_limit)
 
         %{
           output: output,
@@ -858,6 +899,33 @@ defmodule Hivebeam.AcpClient do
   end
 
   defp normalize_dangerously(_value), do: false
+
+  defp normalize_terminal_sandbox_mode(value) when value in [:required, :best_effort, :off],
+    do: value
+
+  defp normalize_terminal_sandbox_mode(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "required" -> :required
+      "best_effort" -> :best_effort
+      "best-effort" -> :best_effort
+      "off" -> :off
+      _ -> Config.terminal_sandbox_mode()
+    end
+  end
+
+  defp normalize_terminal_sandbox_mode(_value), do: Config.terminal_sandbox_mode()
+
+  defp ensure_terminal_capability(%{terminal_capability: true}), do: :ok
+
+  defp ensure_terminal_capability(state) do
+    details = %{
+      reason: "terminal_disabled_in_sandbox",
+      mode: TerminalSandbox.mode_label(state.terminal_sandbox_mode),
+      backend: TerminalSandbox.backend_label(state.terminal_sandbox_backend)
+    }
+
+    {:error, sandbox_error("terminal/create", details)}
+  end
 
   defp normalize_provider(value) when is_binary(value) do
     value

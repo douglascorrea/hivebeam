@@ -84,12 +84,15 @@ Central config (`Hivebeam.Gateway.Config`):
 - `HIVEBEAM_GATEWAY_SANDBOX_ALLOWED_ROOTS`
 - `HIVEBEAM_GATEWAY_SANDBOX_DEFAULT_ROOT`
 - `HIVEBEAM_GATEWAY_DANGEROUSLY`
+- `HIVEBEAM_GATEWAY_TERMINAL_SANDBOX_MODE`
 
 Enforcement points:
 - Session creation gate: validates and canonicalizes `cwd`.
 - PolicyGate tool decision: path-based allow/deny.
 - Worker approval backup guard: auto-deny outside sandbox.
-- ACP client execution guard: hard deny on out-of-sandbox fs/terminal actions.
+- ACP client execution guard:
+  - hard deny on out-of-sandbox fs actions
+  - `terminal/create` allowed in sandbox only when terminal jail backend is active
 
 `dangerously` behavior:
 - Global flag (`HIVEBEAM_GATEWAY_DANGEROUSLY=true`) and per-session request flag (`dangerously: true`) bypass sandbox path restrictions.
@@ -180,4 +183,3 @@ sequenceDiagram
 - Level 0 (now): single node.
 - Level 1: hub + workers for many machines/workspaces.
 - Level 2: HA hub with shared state and sticky session routing.
-

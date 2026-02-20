@@ -214,13 +214,18 @@ defmodule Hivebeam.Gateway.SessionWorker do
     reply_to = fetch_field(payload, :reply_to)
     request = fetch_field(payload, :request) || %{}
 
+    log_debug_approval_request(state, request)
+
     if is_reference(ref) and is_pid(reply_to) do
       case policy_decision(state, request) do
         {:allow, audit} ->
+          log_debug_policy_result(state, request, :allow, :policy_gate_allow, audit)
           state = append_policy_decision(state, audit)
 
           case backup_sandbox_decision(state, request) do
             :allow ->
+              log_debug_policy_result(state, request, :allow, :backup_guard_allow, nil)
+
               timer_ref =
                 Process.send_after(
                   self(),
@@ -246,6 +251,7 @@ defmodule Hivebeam.Gateway.SessionWorker do
               {:noreply, state}
 
             {:deny, reason} ->
+              log_debug_policy_result(state, request, :deny, :backup_guard_deny, reason)
               send(reply_to, {:codex_tool_approval_reply, ref, false})
 
               state =
@@ -259,6 +265,7 @@ defmodule Hivebeam.Gateway.SessionWorker do
           end
 
         {:deny, reason, audit} ->
+          log_debug_policy_result(state, request, :deny, :policy_gate_deny, reason)
           send(reply_to, {:codex_tool_approval_reply, ref, false})
 
           state =
@@ -811,6 +818,49 @@ defmodule Hivebeam.Gateway.SessionWorker do
   end
 
   defp normalize_operation(_operation), do: "unknown"
+
+  defp log_debug_approval_request(state, request) do
+    if Config.debug_enabled?() do
+      Logger.debug(fn ->
+        operation =
+          request
+          |> fetch_field(:operation)
+          |> normalize_operation()
+
+        extracted_path =
+          case extract_request_path(request) do
+            {:ok, _op, path} -> path
+            :no_path -> nil
+          end
+
+        details = request |> fetch_field(:details) |> sanitize_payload()
+
+        "[gateway][approval][request] session=#{state.session_key} provider=#{state.provider} " <>
+          "operation=#{operation} extracted_path=#{inspect(extracted_path)} " <>
+          "dangerously=#{state.dangerously} sandbox_roots=#{inspect(state.sandbox_roots)} " <>
+          "details=#{inspect(details, limit: 50)}"
+      end)
+    end
+  end
+
+  defp log_debug_policy_result(state, request, decision, stage, reason_or_audit) do
+    if Config.debug_enabled?() do
+      Logger.debug(fn ->
+        operation =
+          request
+          |> fetch_field(:operation)
+          |> normalize_operation()
+
+        reason =
+          reason_or_audit
+          |> sanitize_payload()
+          |> inspect(limit: 50)
+
+        "[gateway][approval][decision] session=#{state.session_key} provider=#{state.provider} " <>
+          "operation=#{operation} stage=#{stage} decision=#{decision} reason=#{reason}"
+      end)
+    end
+  end
 
   defp queue_len(queue), do: :queue.len(queue)
 

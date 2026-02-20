@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Hivebeam.Gateway.Run do
   use Mix.Task
 
+  require Logger
+
   alias Hivebeam.Gateway.Config
 
   @shortdoc "Starts Hivebeam gateway (HTTP + WebSocket) and blocks"
@@ -11,7 +13,8 @@ defmodule Mix.Tasks.Hivebeam.Gateway.Run do
     data_dir: :string,
     sandbox_root: :keep,
     sandbox_default_root: :string,
-    dangerously: :boolean
+    dangerously: :boolean,
+    debug: :boolean
   ]
 
   @impl Mix.Task
@@ -55,11 +58,21 @@ defmodule Mix.Tasks.Hivebeam.Gateway.Run do
       System.put_env("HIVEBEAM_GATEWAY_DANGEROUSLY", "true")
     end
 
+    if Keyword.get(opts, :debug, false) do
+      System.put_env("HIVEBEAM_GATEWAY_DEBUG", "true")
+      :ok = Logger.configure(level: :debug)
+    end
+
     :ok = Config.require_token!()
 
     Mix.Task.run("app.start")
 
     Mix.shell().info("Gateway listening on #{Config.bind()}")
+
+    if Config.debug_enabled?() do
+      Mix.shell().info("Gateway debug logging is enabled")
+    end
+
     Process.sleep(:infinity)
   end
 end

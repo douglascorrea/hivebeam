@@ -6,7 +6,9 @@ defmodule Hivebeam.Gateway.Config do
   @default_max_events 50_000
   @default_reconnect_ms 2_000
   @default_approval_timeout_ms 120_000
+  @default_debug false
   @default_sandbox_dangerously false
+  @default_terminal_sandbox_mode :required
   @default_policy_redact_prompts false
   @default_policy_deny_secret_prompts false
   @default_policy_audit_enabled true
@@ -71,6 +73,11 @@ defmodule Hivebeam.Gateway.Config do
       _ ->
         nil
     end
+  end
+
+  @spec debug_enabled?() :: boolean()
+  def debug_enabled? do
+    parse_boolean(System.get_env("HIVEBEAM_GATEWAY_DEBUG"), @default_debug)
   end
 
   @spec data_dir() :: String.t()
@@ -167,6 +174,14 @@ defmodule Hivebeam.Gateway.Config do
   @spec sandbox_dangerously_enabled?() :: boolean()
   def sandbox_dangerously_enabled? do
     parse_boolean(System.get_env("HIVEBEAM_GATEWAY_DANGEROUSLY"), @default_sandbox_dangerously)
+  end
+
+  @spec terminal_sandbox_mode() :: :required | :best_effort | :off
+  def terminal_sandbox_mode do
+    parse_terminal_sandbox_mode(
+      System.get_env("HIVEBEAM_GATEWAY_TERMINAL_SANDBOX_MODE"),
+      @default_terminal_sandbox_mode
+    )
   end
 
   @spec sandbox_default_root() :: String.t()
@@ -427,6 +442,23 @@ defmodule Hivebeam.Gateway.Config do
   end
 
   defp parse_boolean(_value, default), do: default
+
+  defp parse_terminal_sandbox_mode(value, _default)
+       when value in [:required, :best_effort, :off],
+       do: value
+
+  defp parse_terminal_sandbox_mode(value, default) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "required" -> :required
+      "best_effort" -> :best_effort
+      "best-effort" -> :best_effort
+      "off" -> :off
+      "" -> default
+      _ -> default
+    end
+  end
+
+  defp parse_terminal_sandbox_mode(_value, default), do: default
 
   defp path_separator do
     case :os.type() do

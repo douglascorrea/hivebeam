@@ -233,6 +233,7 @@ defmodule Hivebeam.CodexBridgeTest do
   use ExUnit.Case, async: false
 
   alias Hivebeam.CodexBridge
+  alias Hivebeam.TerminalSandbox
 
   setup do
     {:ok, _pid} = Hivebeam.Test.FakeAcpStore.start_link([])
@@ -276,7 +277,9 @@ defmodule Hivebeam.CodexBridgeTest do
              end)
 
     assert get_in(initialize_payload, ["clientCapabilities", "fs", "readTextFile"]) == true
-    assert get_in(initialize_payload, ["clientCapabilities", "terminal"]) == true
+
+    assert get_in(initialize_payload, ["clientCapabilities", "terminal"]) ==
+             TerminalSandbox.terminal_capability_enabled?(dangerously: false)
 
     assert {:session_new, session_new_payload} =
              Enum.find(Hivebeam.Test.FakeAcpStore.calls(), fn
@@ -291,6 +294,41 @@ defmodule Hivebeam.CodexBridgeTest do
                {:session_set_mode, _params} -> true
                _ -> false
              end)
+  end
+
+  test "disables terminal capability when sandbox terminal mode is off" do
+    bridge_name = :"codex_bridge_#{System.unique_integer([:positive])}"
+    tool_cwd = Path.join(System.tmp_dir!(), "hivebeam_codex_bridge_terminal_off")
+
+    File.mkdir_p!(tool_cwd)
+
+    {:ok, bridge_pid} =
+      CodexBridge.start_link(
+        name: bridge_name,
+        acpex_module: Hivebeam.Test.FakeACPex,
+        connection_module: Hivebeam.Test.FakeConnection,
+        config: %{
+          acp_command: {"fake-acp", []},
+          reconnect_ms: 20,
+          tool_cwd: tool_cwd,
+          terminal_sandbox_mode: :off,
+          terminal_sandbox_backend: :none
+        }
+      )
+
+    on_exit(fn -> safe_stop(bridge_pid) end)
+
+    wait_until(fn ->
+      {:ok, status} = CodexBridge.status(bridge_name)
+      status.connected
+    end)
+
+    assert {:initialize, initialize_payload} =
+             Enum.find(Hivebeam.Test.FakeAcpStore.calls(), fn {kind, _} ->
+               kind == :initialize
+             end)
+
+    assert get_in(initialize_payload, ["clientCapabilities", "terminal"]) == false
   end
 
   test "enforces full-access mode when approval mode is allow" do

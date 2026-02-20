@@ -6,6 +6,8 @@ defmodule Hivebeam.AgentBridge do
 
   alias Hivebeam.CodexConfig
   alias Hivebeam.CodexStream
+  alias Hivebeam.Gateway.Config
+  alias Hivebeam.TerminalSandbox
 
   @type status :: :connecting | :connected | :degraded
   @type approval_mode :: :ask | :allow | :deny
@@ -67,6 +69,21 @@ defmodule Hivebeam.AgentBridge do
       |> normalize_approval_mode(:ask)
 
     tool_cwd = Map.get(config, :tool_cwd, File.cwd!())
+    sandbox_roots = Map.get(config, :sandbox_roots, [tool_cwd]) |> List.wrap()
+    sandbox_default_root = Map.get(config, :sandbox_default_root, tool_cwd)
+    dangerously = normalize_dangerously(Map.get(config, :dangerously, false))
+
+    terminal_sandbox_mode =
+      Map.get(config, :terminal_sandbox_mode, Config.terminal_sandbox_mode())
+
+    terminal_sandbox_backend = Map.get(config, :terminal_sandbox_backend, :auto)
+
+    terminal_capability =
+      TerminalSandbox.terminal_capability_enabled?(
+        dangerously: dangerously,
+        mode: terminal_sandbox_mode,
+        backend: terminal_sandbox_backend
+      )
 
     state = %{
       acp_client_module: acp_client_module,
@@ -88,9 +105,12 @@ defmodule Hivebeam.AgentBridge do
       reconnect_ms: Map.get(config, :reconnect_ms, CodexConfig.reconnect_ms()),
       reconnect_timer_ref: nil,
       tool_cwd: tool_cwd,
-      sandbox_roots: Map.get(config, :sandbox_roots, [tool_cwd]) |> List.wrap(),
-      sandbox_default_root: Map.get(config, :sandbox_default_root, tool_cwd),
-      dangerously: normalize_dangerously(Map.get(config, :dangerously, false)),
+      sandbox_roots: sandbox_roots,
+      sandbox_default_root: sandbox_default_root,
+      dangerously: dangerously,
+      terminal_sandbox_mode: terminal_sandbox_mode,
+      terminal_sandbox_backend: terminal_sandbox_backend,
+      terminal_capability: terminal_capability,
       default_approval_mode: default_approval_mode,
       approval_timeout_ms: Map.get(config, :approval_timeout_ms, @default_approval_timeout_ms),
       enforced_provider_mode: nil
@@ -120,7 +140,8 @@ defmodule Hivebeam.AgentBridge do
       last_error: state.last_error,
       last_prompt_result: state.last_prompt_result,
       approval_mode: current_approval_mode(state),
-      enforced_provider_mode: state.enforced_provider_mode
+      enforced_provider_mode: state.enforced_provider_mode,
+      terminal_capability: state.terminal_capability
     }
 
     {:reply, {:ok, response}, state}
@@ -444,7 +465,9 @@ defmodule Hivebeam.AgentBridge do
       tool_cwd: state.tool_cwd,
       sandbox_roots: state.sandbox_roots,
       sandbox_default_root: state.sandbox_default_root,
-      dangerously: state.dangerously
+      dangerously: state.dangerously,
+      terminal_sandbox_mode: state.terminal_sandbox_mode,
+      terminal_sandbox_backend: state.terminal_sandbox_backend
     ]
 
     start_result =
@@ -503,7 +526,7 @@ defmodule Hivebeam.AgentBridge do
           "readTextFile" => true,
           "writeTextFile" => true
         },
-        "terminal" => true
+        "terminal" => state.terminal_capability
       },
       "clientInfo" => %{
         "name" => "hivebeam",

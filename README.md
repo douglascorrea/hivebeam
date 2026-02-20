@@ -40,6 +40,12 @@ Or with explicit options:
 mix hivebeam gateway run --bind 0.0.0.0:8080 --token "replace-with-strong-token" --sandbox-root "$PWD"
 ```
 
+Enable verbose gateway decision logs:
+
+```bash
+mix hivebeam gateway run --token "replace-with-strong-token" --debug
+```
+
 Default bind is `0.0.0.0:8080`; APIs are exposed under `/v1`.
 
 ## HTTP endpoints
@@ -76,7 +82,8 @@ Session creation and tool operations are sandboxed by path policy.
 - Session creation canonicalizes `cwd` and rejects out-of-sandbox paths.
 - `PolicyGate` is the central allow/deny decision point for prompt/tool policy.
 - Approval requests targeting out-of-sandbox paths are auto-denied by the gateway worker.
-- ACP filesystem/terminal operations are hard-blocked outside the sandbox (defense in depth).
+- ACP filesystem operations are hard-blocked outside the sandbox (defense in depth).
+- `terminal/create` in sandboxed sessions is allowed only when a terminal jail backend is active; otherwise it is denied.
 - Session create request accepts `dangerously: true` to bypass sandbox checks for that session.
 - Global bypass flag: `mix hivebeam gateway run --dangerously` (or `HIVEBEAM_GATEWAY_DANGEROUSLY=true`).
 - Closed sessions do not respawn workers on `attach`; prompt/cancel/approve return `session_closed`.
@@ -106,6 +113,8 @@ Gateway:
 - `HIVEBEAM_GATEWAY_SANDBOX_ALLOWED_ROOTS` (path-separated roots, default `HIVEBEAM_GATEWAY_SANDBOX_DEFAULT_ROOT`)
 - `HIVEBEAM_GATEWAY_SANDBOX_DEFAULT_ROOT` (default process cwd at boot)
 - `HIVEBEAM_GATEWAY_DANGEROUSLY` (default `false`)
+- `HIVEBEAM_GATEWAY_TERMINAL_SANDBOX_MODE` (`required` | `best_effort` | `off`, default `required`)
+- `HIVEBEAM_GATEWAY_DEBUG` (default `false`; enables verbose gateway decision logs)
 - `HIVEBEAM_GATEWAY_POLICY_REDACT_PROMPTS` (default `false`)
 - `HIVEBEAM_GATEWAY_POLICY_DENY_SECRET_PROMPTS` (default `false`)
 - `HIVEBEAM_GATEWAY_POLICY_AUDIT_ENABLED` (default `true`)

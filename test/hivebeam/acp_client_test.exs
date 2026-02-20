@@ -2,6 +2,7 @@ defmodule Hivebeam.AcpClientTest do
   use ExUnit.Case, async: true
 
   alias Hivebeam.AcpClient
+  alias Hivebeam.TerminalSandbox
 
   test "forwards session updates to the bridge process" do
     assert {:ok, state} = AcpClient.init(bridge: self())
@@ -50,6 +51,7 @@ defmodule Hivebeam.AcpClientTest do
              AcpClient.init(
                bridge: self(),
                tool_cwd: tmp_dir,
+               dangerously: true,
                approval_fun: fn _request, _state -> {:ok, true} end
              )
 
@@ -86,6 +88,29 @@ defmodule Hivebeam.AcpClientTest do
                %{"sessionId" => "s1", "terminalId" => terminal_id},
                state
              )
+  end
+
+  test "denies terminal create when sandbox mode disables terminal capability" do
+    tmp_dir = unique_tmp_dir("codex_acp_terminal_disabled")
+
+    assert {:ok, state} =
+             AcpClient.init(
+               bridge: self(),
+               tool_cwd: tmp_dir,
+               terminal_sandbox_mode: :off,
+               terminal_sandbox_backend: :none,
+               approval_fun: fn _request, _state -> {:ok, true} end
+             )
+
+    assert {:error, %{code: -32_004, details: details}, _state} =
+             AcpClient.handle_request(
+               "terminal/create",
+               %{"sessionId" => "s1", "command" => "/bin/sh", "args" => ["-lc", "echo hi"]},
+               state
+             )
+
+    assert Map.get(details, :reason) == "terminal_disabled_in_sandbox" or
+             Map.get(details, "reason") == "terminal_disabled_in_sandbox"
   end
 
   test "denies filesystem and terminal operations when approvals are denied" do
@@ -144,6 +169,58 @@ defmodule Hivebeam.AcpClientTest do
                },
                state
              )
+  end
+
+  test "sandboxed terminal blocks writes outside sandbox roots when backend is available" do
+    if TerminalSandbox.terminal_capability_enabled?(
+         dangerously: false,
+         mode: :required,
+         backend: :auto
+       ) do
+      sandbox_root = unique_tmp_dir("codex_acp_terminal_guard")
+      outside_root = unique_tmp_dir("codex_acp_terminal_outside")
+      outside_file = Path.join(outside_root, "escape.txt")
+
+      assert {:ok, state} =
+               AcpClient.init(
+                 bridge: self(),
+                 tool_cwd: sandbox_root,
+                 sandbox_roots: [sandbox_root],
+                 terminal_sandbox_mode: :required,
+                 terminal_sandbox_backend: :auto,
+                 approval_fun: fn _request, _state -> {:ok, true} end
+               )
+
+      assert {:ok, %{"terminalId" => terminal_id}, state} =
+               AcpClient.handle_request(
+                 "terminal/create",
+                 %{
+                   "sessionId" => "s1",
+                   "command" => "/bin/sh",
+                   "args" => ["-lc", "touch #{outside_file}"]
+                 },
+                 state
+               )
+
+      assert {:ok, %{"exitCode" => exit_code}, state} =
+               AcpClient.handle_request(
+                 "terminal/wait_for_exit",
+                 %{"sessionId" => "s1", "terminalId" => terminal_id},
+                 state
+               )
+
+      assert exit_code != 0
+      refute File.exists?(outside_file)
+
+      assert {:ok, %{}, _state} =
+               AcpClient.handle_request(
+                 "terminal/release",
+                 %{"sessionId" => "s1", "terminalId" => terminal_id},
+                 state
+               )
+    else
+      assert true
+    end
   end
 
   test "permission request chooses approval option on allow" do

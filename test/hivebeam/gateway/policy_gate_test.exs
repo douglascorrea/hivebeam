@@ -70,6 +70,29 @@ defmodule Hivebeam.Gateway.PolicyGateTest do
     assert get_in(details, [:reason, :reason]) == "sandbox_violation"
   end
 
+  test "tool operation policy can deny terminal create when sandbox terminal mode is off" do
+    sandbox_root = unique_tmp_dir("policy_gate_terminal_root")
+
+    context = %{
+      session_key: "hbs_policy_terminal",
+      provider: "codex",
+      tool_cwd: sandbox_root,
+      sandbox_roots: [sandbox_root],
+      dangerously: false,
+      terminal_sandbox_mode: :off,
+      terminal_sandbox_backend: :none
+    }
+
+    assert {:error, {:policy_denied, details}} =
+             PolicyGate.evaluate_tool_operation(
+               context,
+               "terminal/create",
+               %{command: "/bin/sh", args: ["-lc", "echo hi"], cwd: sandbox_root}
+             )
+
+    assert get_in(details, [:reason, :reason]) == "terminal_disabled_in_sandbox"
+  end
+
   defp unique_tmp_dir(prefix) do
     dir = Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
