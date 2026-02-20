@@ -66,7 +66,14 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
           send(
             approval_to,
             {:codex_tool_approval_request,
-             %{ref: ref, reply_to: self(), request: %{operation: "terminal/create"}}}
+             %{
+               ref: ref,
+               reply_to: self(),
+               request: %{
+                 operation: "fs/read_text_file",
+                 details: %{path: Path.join(File.cwd!(), "mix.exs")}
+               }
+             }}
           )
 
           receive do
@@ -161,7 +168,6 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
                gateway_session_key: key,
                provider: "codex",
                cwd: File.cwd!(),
-               dangerously: true,
                approval_mode: :ask,
                status: "creating",
                connected: false,
