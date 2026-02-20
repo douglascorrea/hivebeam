@@ -17,6 +17,14 @@ mix deps.get
 mix compile
 ```
 
+Quality checks:
+
+```bash
+mix format --check-formatted
+mix compile --warnings-as-errors
+HIVEBEAM_GATEWAY_TOKEN=dev-token HIVEBEAM_GATEWAY_BIND=127.0.0.1:18080 mix test
+```
+
 ## Gateway runtime
 
 Hivebeam runs as a gateway-only app and requires an auth token at boot.
@@ -66,10 +74,24 @@ Gateway `approval_mode` is authoritative for gateway-created sessions.
 Session creation and tool operations are sandboxed by path policy.
 
 - Session creation canonicalizes `cwd` and rejects out-of-sandbox paths.
+- `PolicyGate` is the central allow/deny decision point for prompt/tool policy.
 - Approval requests targeting out-of-sandbox paths are auto-denied by the gateway worker.
 - ACP filesystem/terminal operations are hard-blocked outside the sandbox (defense in depth).
 - Session create request accepts `dangerously: true` to bypass sandbox checks for that session.
 - Global bypass flag: `mix hivebeam gateway run --dangerously` (or `HIVEBEAM_GATEWAY_DANGEROUSLY=true`).
+- Closed sessions do not respawn workers on `attach`; prompt/cancel/approve return `session_closed`.
+
+## Policy gate
+
+`Hivebeam.Gateway.PolicyGate` runs a central policy pipeline for gateway operations:
+
+- classify
+- redact (optional)
+- allow/deny
+- route (provider mapping)
+- audit payload generation
+
+Execution-side guards remain in router/worker/ACP client as backup safety checks.
 
 ## Configuration
 
@@ -84,6 +106,14 @@ Gateway:
 - `HIVEBEAM_GATEWAY_SANDBOX_ALLOWED_ROOTS` (path-separated roots, default `HIVEBEAM_GATEWAY_SANDBOX_DEFAULT_ROOT`)
 - `HIVEBEAM_GATEWAY_SANDBOX_DEFAULT_ROOT` (default process cwd at boot)
 - `HIVEBEAM_GATEWAY_DANGEROUSLY` (default `false`)
+- `HIVEBEAM_GATEWAY_POLICY_REDACT_PROMPTS` (default `false`)
+- `HIVEBEAM_GATEWAY_POLICY_DENY_SECRET_PROMPTS` (default `false`)
+- `HIVEBEAM_GATEWAY_POLICY_AUDIT_ENABLED` (default `true`)
+- `HIVEBEAM_GATEWAY_POLICY_PROVIDER_ROUTES` (e.g. `codex=claude,claude=claude`)
+- `HIVEBEAM_GATEWAY_POLICY_TOOL_ALLOWLIST` (comma-separated ACP operations; empty means allow all)
+- `HIVEBEAM_GATEWAY_SLO_REPORT_INTERVAL_MS` (default `60000`)
+- `HIVEBEAM_GATEWAY_SLO_SESSION_CREATE_P95_MS` (default `1500`)
+- `HIVEBEAM_GATEWAY_SLO_WORKER_CRASH_RATE` (default `0.10`)
 
 ACP provider commands:
 
@@ -128,4 +158,4 @@ See the Elixir SDK matrix in `hivebeam-client-elixir/COMPATIBILITY.md` (or that 
 
 Detailed gateway support matrix and architecture recommendations:
 
-- `docs/gateway-capabilities.md`
+- `ARCHITECTURE.md`

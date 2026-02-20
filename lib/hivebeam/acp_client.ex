@@ -6,6 +6,7 @@ defmodule Hivebeam.AcpClient do
 
   alias Hivebeam.CodexBridge
   alias Hivebeam.Gateway.Config
+  alias Hivebeam.Gateway.PolicyGate
 
   @default_approval_timeout_ms 120_000
   @default_terminal_output_limit 200_000
@@ -31,6 +32,8 @@ defmodule Hivebeam.AcpClient do
     {:ok,
      %{
        bridge: Keyword.fetch!(args, :bridge),
+       session_key: Keyword.get(args, :session_key),
+       provider: args |> Keyword.get(:provider, "codex") |> normalize_provider(),
        tool_cwd: tool_cwd,
        sandbox_roots: sandbox_roots,
        sandbox_default_root: sandbox_default_root,
@@ -96,7 +99,8 @@ defmodule Hivebeam.AcpClient do
     line = fetch(request, :line)
     limit = fetch(request, :limit)
 
-    with :ok <- ensure_sandbox_path(state, "fs/read_text_file", path),
+    with :ok <- ensure_policy_allows_tool(state, "fs/read_text_file", %{path: path}),
+         :ok <- ensure_sandbox_path(state, "fs/read_text_file", path),
          :ok <- ensure_approved(state, "fs/read_text_file", %{path: path}),
          {:ok, content} <- File.read(path) do
       content = apply_line_limit(content, line, limit)
@@ -112,7 +116,8 @@ defmodule Hivebeam.AcpClient do
     path = resolve_path(fetch(request, :path), state.tool_cwd)
     content = fetch(request, :content) || ""
 
-    with :ok <- ensure_sandbox_path(state, "fs/write_text_file", path),
+    with :ok <- ensure_policy_allows_tool(state, "fs/write_text_file", %{path: path}),
+         :ok <- ensure_sandbox_path(state, "fs/write_text_file", path),
          :ok <- ensure_approved(state, "fs/write_text_file", %{path: path}),
          :ok <- ensure_parent_dir(path),
          :ok <- File.write(path, content) do
@@ -136,6 +141,12 @@ defmodule Hivebeam.AcpClient do
     args = fetch(request, :args) |> List.wrap()
 
     with true <- is_binary(command) and command != "",
+         :ok <-
+           ensure_policy_allows_tool(state, "terminal/create", %{
+             command: command,
+             args: args,
+             cwd: cwd
+           }),
          :ok <- ensure_sandbox_path(state, "terminal/create", cwd),
          :ok <-
            ensure_approved(state, "terminal/create", %{command: command, args: args, cwd: cwd}) do
@@ -214,6 +225,7 @@ defmodule Hivebeam.AcpClient do
     terminal_id = fetch(request, :terminal_id) || fetch(request, :terminalId)
 
     with {:ok, terminal} <- fetch_terminal(state, terminal_id),
+         :ok <- ensure_policy_allows_tool(state, "terminal/kill", %{terminal_id: terminal_id}),
          :ok <- ensure_approved(state, "terminal/kill", %{terminal_id: terminal_id}) do
       if not terminal.done? and is_pid(terminal.worker_pid) and
            Process.alive?(terminal.worker_pid) do
@@ -287,6 +299,72 @@ defmodule Hivebeam.AcpClient do
         {:error, sandbox_error(operation, %{path: path, reason: inspect(reason)})}
     end
   end
+
+  defp ensure_policy_allows_tool(state, operation, details) do
+    context = %{
+      session_key: state.session_key,
+      provider: state.provider,
+      tool_cwd: state.tool_cwd,
+      sandbox_roots: state.sandbox_roots,
+      dangerously: state.dangerously
+    }
+
+    case PolicyGate.evaluate_tool_operation(context, operation, details) do
+      {:ok, %{audit: audit}} ->
+        emit_policy_telemetry(operation, audit)
+        :ok
+
+      {:error, {:policy_denied, %{reason: reason, audit: audit}}} ->
+        emit_policy_telemetry(operation, audit)
+        {:error, policy_error(operation, reason)}
+
+      {:error, {:policy_denied, %{reason: reason}}} ->
+        {:error, policy_error(operation, reason)}
+
+      {:error, reason} ->
+        {:error, policy_error(operation, %{reason: inspect(reason)})}
+    end
+  end
+
+  defp emit_policy_telemetry(operation, audit) when is_map(audit) do
+    if Map.get(audit, :audit_enabled, Map.get(audit, "audit_enabled", true)) do
+      :telemetry.execute(
+        [:hivebeam, :gateway, :policy, :decision],
+        %{count: 1},
+        %{source: "acp_client", operation: operation, audit: audit}
+      )
+    end
+
+    :ok
+  end
+
+  defp emit_policy_telemetry(_operation, _audit), do: :ok
+
+  defp policy_error(operation, reason) do
+    details = normalize_policy_reason(reason)
+
+    if sandbox_policy_reason?(details) do
+      sandbox_error(operation, details)
+    else
+      %{
+        code: -32_003,
+        message: "#{operation} denied by policy gate",
+        details: details
+      }
+    end
+  end
+
+  defp sandbox_policy_reason?(details) when is_map(details) do
+    reason = fetch(details, :reason)
+
+    reason in ["sandbox_violation", :sandbox_violation] or Map.has_key?(details, :allowed_roots) or
+      Map.has_key?(details, "allowed_roots")
+  end
+
+  defp sandbox_policy_reason?(_details), do: false
+
+  defp normalize_policy_reason(reason) when is_map(reason), do: reason
+  defp normalize_policy_reason(reason), do: %{reason: inspect(reason)}
 
   defp ensure_approved(state, operation, details) do
     case approval_decision(state, operation, details) do
@@ -780,6 +858,24 @@ defmodule Hivebeam.AcpClient do
   end
 
   defp normalize_dangerously(_value), do: false
+
+  defp normalize_provider(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.downcase()
+    |> case do
+      "" -> "codex"
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_provider(value) when is_atom(value) do
+    value
+    |> Atom.to_string()
+    |> normalize_provider()
+  end
+
+  defp normalize_provider(_value), do: "codex"
 
   defp fetch(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

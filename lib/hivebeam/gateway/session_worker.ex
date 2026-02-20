@@ -9,6 +9,8 @@ defmodule Hivebeam.Gateway.SessionWorker do
   alias Hivebeam.CodexConfig
   alias Hivebeam.Gateway.Config
   alias Hivebeam.Gateway.EventLog
+  alias Hivebeam.Gateway.PolicyGate
+  alias Hivebeam.Gateway.SLO
   alias Hivebeam.Gateway.SessionRouter
   alias Hivebeam.Gateway.Store
 
@@ -213,37 +215,56 @@ defmodule Hivebeam.Gateway.SessionWorker do
     request = fetch_field(payload, :request) || %{}
 
     if is_reference(ref) and is_pid(reply_to) do
-      case sandbox_decision(state, request) do
-        :allow ->
-          timer_ref =
-            Process.send_after(
-              self(),
-              {:approval_timeout, approval_ref},
-              state.approval_timeout_ms
-            )
+      case policy_decision(state, request) do
+        {:allow, audit} ->
+          state = append_policy_decision(state, audit)
 
-          pending =
-            Map.put(state.pending_approvals, approval_ref, %{
-              ref: ref,
-              reply_to: reply_to,
-              timer_ref: timer_ref
-            })
+          case backup_sandbox_decision(state, request) do
+            :allow ->
+              timer_ref =
+                Process.send_after(
+                  self(),
+                  {:approval_timeout, approval_ref},
+                  state.approval_timeout_ms
+                )
 
-          state =
-            state
-            |> Map.put(:pending_approvals, pending)
-            |> append_and_broadcast("approval_requested", "gateway", %{
-              approval_ref: approval_ref,
-              request: sanitize_payload(request)
-            })
+              pending =
+                Map.put(state.pending_approvals, approval_ref, %{
+                  ref: ref,
+                  reply_to: reply_to,
+                  timer_ref: timer_ref
+                })
 
-          {:noreply, state}
+              state =
+                state
+                |> Map.put(:pending_approvals, pending)
+                |> append_and_broadcast("approval_requested", "gateway", %{
+                  approval_ref: approval_ref,
+                  request: sanitize_payload(request)
+                })
 
-        {:deny, reason} ->
+              {:noreply, state}
+
+            {:deny, reason} ->
+              send(reply_to, {:codex_tool_approval_reply, ref, false})
+
+              state =
+                append_and_broadcast(state, "approval_auto_denied", "gateway", %{
+                  approval_ref: approval_ref,
+                  request: sanitize_payload(request),
+                  reason: sanitize_payload(Map.put(reason, :source, "backup_sandbox_guard"))
+                })
+
+              {:noreply, state}
+          end
+
+        {:deny, reason, audit} ->
           send(reply_to, {:codex_tool_approval_reply, ref, false})
 
           state =
-            append_and_broadcast(state, "approval_auto_denied", "gateway", %{
+            state
+            |> append_policy_decision(audit)
+            |> append_and_broadcast("approval_auto_denied", "gateway", %{
               approval_ref: approval_ref,
               request: sanitize_payload(request),
               reason: sanitize_payload(reason)
@@ -345,7 +366,8 @@ defmodule Hivebeam.Gateway.SessionWorker do
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, state) do
+  def terminate(reason, state) do
+    :ok = SLO.record_worker_exit(reason)
     stop_bridge(state)
     :ok
   end
@@ -525,6 +547,16 @@ defmodule Hivebeam.Gateway.SessionWorker do
     end
   end
 
+  defp append_policy_decision(state, audit) when is_map(audit) do
+    if Map.get(audit, :audit_enabled, Map.get(audit, "audit_enabled", true)) do
+      append_and_broadcast(state, "policy_decision", "policy", sanitize_payload(audit))
+    else
+      state
+    end
+  end
+
+  defp append_policy_decision(state, _audit), do: state
+
   defp persist_session(state, attrs) do
     case Store.get_session(state.session_key) do
       {:ok, session} ->
@@ -688,9 +720,9 @@ defmodule Hivebeam.Gateway.SessionWorker do
 
   defp normalize_dangerously(_), do: false
 
-  defp sandbox_decision(state, _request) when state.dangerously, do: :allow
+  defp backup_sandbox_decision(state, _request) when state.dangerously, do: :allow
 
-  defp sandbox_decision(state, request) do
+  defp backup_sandbox_decision(state, request) do
     case extract_request_path(request) do
       :no_path ->
         :allow
@@ -706,6 +738,30 @@ defmodule Hivebeam.Gateway.SessionWorker do
           {:error, reason} ->
             {:deny, %{operation: operation, reason: inspect(reason), path: path}}
         end
+    end
+  end
+
+  defp policy_decision(state, request) do
+    session = %{
+      gateway_session_key: state.session_key,
+      provider: state.provider,
+      cwd: state.cwd,
+      sandbox_roots: state.sandbox_roots,
+      dangerously: state.dangerously
+    }
+
+    case PolicyGate.evaluate_tool_request(session, request) do
+      {:ok, %{audit: audit}} ->
+        {:allow, audit}
+
+      {:error, {:policy_denied, %{reason: reason, audit: audit}}} ->
+        {:deny, reason, audit}
+
+      {:error, {:policy_denied, %{reason: reason}}} ->
+        {:deny, reason, %{stage: "tool_request", decision: "deny", reason: reason}}
+
+      {:error, reason} ->
+        {:deny, %{reason: inspect(reason)}, %{stage: "tool_request", decision: "deny"}}
     end
   end
 

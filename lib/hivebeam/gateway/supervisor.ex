@@ -4,6 +4,7 @@ defmodule Hivebeam.Gateway.Supervisor do
 
   alias Hivebeam.Gateway.Config
   alias Hivebeam.Gateway.HTTP.Server
+  alias Hivebeam.Gateway.SLO
   alias Hivebeam.Gateway.SessionSupervisor
   alias Hivebeam.Gateway.Store
 
@@ -20,6 +21,7 @@ defmodule Hivebeam.Gateway.Supervisor do
       {Registry, keys: :duplicate, name: Hivebeam.Gateway.EventRegistry},
       {Store,
        [data_dir: Config.data_dir(), max_events_per_session: Config.max_events_per_session()]},
+      {SLO, []},
       {SessionSupervisor, []},
       {Server, []}
     ]

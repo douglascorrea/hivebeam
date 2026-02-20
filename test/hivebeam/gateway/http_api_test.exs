@@ -187,6 +187,92 @@ defmodule Hivebeam.Gateway.HttpApiTest do
     assert Jason.decode!(response.resp_body)["error"] == "cwd_outside_sandbox"
   end
 
+  test "closed sessions do not respawn workers on attach and reject new prompts" do
+    create_body = Jason.encode!(%{"provider" => "codex", "cwd" => File.cwd!()})
+
+    create_conn =
+      conn(:post, "/v1/sessions", create_body)
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer test-token")
+      |> Router.call(Router.init([]))
+
+    assert create_conn.status == 200
+    %{"gateway_session_key" => key} = Jason.decode!(create_conn.resp_body)
+
+    close_conn =
+      conn(:delete, "/v1/sessions/#{key}")
+      |> put_req_header("authorization", "Bearer test-token")
+      |> Router.call(Router.init([]))
+
+    assert close_conn.status == 200
+
+    wait_until(fn ->
+      Registry.lookup(Hivebeam.Gateway.WorkerRegistry, {:session_worker, key}) == []
+    end)
+
+    attach_conn =
+      conn(:post, "/v1/sessions/#{key}/attach", Jason.encode!(%{"after_seq" => 0, "limit" => 20}))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer test-token")
+      |> Router.call(Router.init([]))
+
+    assert attach_conn.status == 200
+    assert Jason.decode!(attach_conn.resp_body)["session"]["status"] == "closed"
+
+    assert Registry.lookup(Hivebeam.Gateway.WorkerRegistry, {:session_worker, key}) == []
+
+    prompt_conn =
+      conn(
+        :post,
+        "/v1/sessions/#{key}/prompts",
+        Jason.encode!(%{"request_id" => "req-closed", "text" => "hello"})
+      )
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer test-token")
+      |> Router.call(Router.init([]))
+
+    assert prompt_conn.status == 409
+    assert Jason.decode!(prompt_conn.resp_body)["error"] == "session_closed"
+  end
+
+  test "policy gate can deny prompt requests" do
+    previous = System.get_env("HIVEBEAM_GATEWAY_POLICY_DENY_SECRET_PROMPTS")
+    System.put_env("HIVEBEAM_GATEWAY_POLICY_DENY_SECRET_PROMPTS", "true")
+
+    on_exit(fn ->
+      if previous do
+        System.put_env("HIVEBEAM_GATEWAY_POLICY_DENY_SECRET_PROMPTS", previous)
+      else
+        System.delete_env("HIVEBEAM_GATEWAY_POLICY_DENY_SECRET_PROMPTS")
+      end
+    end)
+
+    create_body = Jason.encode!(%{"provider" => "codex", "cwd" => File.cwd!()})
+
+    create_conn =
+      conn(:post, "/v1/sessions", create_body)
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer test-token")
+      |> Router.call(Router.init([]))
+
+    assert create_conn.status == 200
+    %{"gateway_session_key" => key} = Jason.decode!(create_conn.resp_body)
+
+    prompt_conn =
+      conn(
+        :post,
+        "/v1/sessions/#{key}/prompts",
+        Jason.encode!(%{"request_id" => "req-secret", "text" => "api_key='secret-123'"})
+      )
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer test-token")
+      |> Router.call(Router.init([]))
+
+    assert prompt_conn.status == 403
+    body = Jason.decode!(prompt_conn.resp_body)
+    assert body["error"] == "policy_denied"
+  end
+
   defp wait_until(fun, attempts \\ 80)
 
   defp wait_until(_fun, 0), do: flunk("condition was not met in time")

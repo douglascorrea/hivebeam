@@ -7,6 +7,12 @@ defmodule Hivebeam.Gateway.Config do
   @default_reconnect_ms 2_000
   @default_approval_timeout_ms 120_000
   @default_sandbox_dangerously false
+  @default_policy_redact_prompts false
+  @default_policy_deny_secret_prompts false
+  @default_policy_audit_enabled true
+  @default_slo_report_interval_ms 60_000
+  @default_slo_session_create_p95_ms 1_500
+  @default_slo_worker_crash_rate 0.10
 
   @spec require_token!() :: :ok
   def require_token! do
@@ -93,6 +99,68 @@ defmodule Hivebeam.Gateway.Config do
     parse_pos_integer(
       System.get_env("HIVEBEAM_GATEWAY_APPROVAL_TIMEOUT_MS"),
       @default_approval_timeout_ms
+    )
+  end
+
+  @spec policy_redact_prompts?() :: boolean()
+  def policy_redact_prompts? do
+    parse_boolean(
+      System.get_env("HIVEBEAM_GATEWAY_POLICY_REDACT_PROMPTS"),
+      @default_policy_redact_prompts
+    )
+  end
+
+  @spec policy_deny_secret_prompts?() :: boolean()
+  def policy_deny_secret_prompts? do
+    parse_boolean(
+      System.get_env("HIVEBEAM_GATEWAY_POLICY_DENY_SECRET_PROMPTS"),
+      @default_policy_deny_secret_prompts
+    )
+  end
+
+  @spec policy_audit_enabled?() :: boolean()
+  def policy_audit_enabled? do
+    parse_boolean(
+      System.get_env("HIVEBEAM_GATEWAY_POLICY_AUDIT_ENABLED"),
+      @default_policy_audit_enabled
+    )
+  end
+
+  @spec policy_tool_allowlist() :: [String.t()]
+  def policy_tool_allowlist do
+    System.get_env("HIVEBEAM_GATEWAY_POLICY_TOOL_ALLOWLIST")
+    |> parse_string_list()
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  @spec policy_provider_routes() :: %{optional(String.t()) => String.t()}
+  def policy_provider_routes do
+    System.get_env("HIVEBEAM_GATEWAY_POLICY_PROVIDER_ROUTES")
+    |> parse_key_value_list()
+  end
+
+  @spec slo_report_interval_ms() :: pos_integer()
+  def slo_report_interval_ms do
+    parse_pos_integer(
+      System.get_env("HIVEBEAM_GATEWAY_SLO_REPORT_INTERVAL_MS"),
+      @default_slo_report_interval_ms
+    )
+  end
+
+  @spec slo_session_create_p95_threshold_ms() :: pos_integer()
+  def slo_session_create_p95_threshold_ms do
+    parse_pos_integer(
+      System.get_env("HIVEBEAM_GATEWAY_SLO_SESSION_CREATE_P95_MS"),
+      @default_slo_session_create_p95_ms
+    )
+  end
+
+  @spec slo_worker_crash_rate_threshold() :: float()
+  def slo_worker_crash_rate_threshold do
+    parse_float(
+      System.get_env("HIVEBEAM_GATEWAY_SLO_WORKER_CRASH_RATE"),
+      @default_slo_worker_crash_rate
     )
   end
 
@@ -230,6 +298,19 @@ defmodule Hivebeam.Gateway.Config do
   defp parse_pos_integer(value, _default) when is_integer(value) and value > 0, do: value
   defp parse_pos_integer(_value, default), do: default
 
+  defp parse_float(nil, default), do: default
+
+  defp parse_float(value, default) when is_binary(value) do
+    case Float.parse(String.trim(value)) do
+      {number, ""} when number >= 0.0 -> number
+      _ -> default
+    end
+  end
+
+  defp parse_float(value, _default) when is_float(value) and value >= 0.0, do: value
+  defp parse_float(value, _default) when is_integer(value) and value >= 0, do: value * 1.0
+  defp parse_float(_value, default), do: default
+
   defp normalize_path_value(value) when is_binary(value) do
     value = String.trim(value)
     if value == "", do: nil, else: value
@@ -353,4 +434,42 @@ defmodule Hivebeam.Gateway.Config do
       _ -> ":"
     end
   end
+
+  defp parse_string_list(nil), do: []
+
+  defp parse_string_list(value) when is_binary(value) do
+    value
+    |> String.replace("\n", ",")
+    |> String.split([",", ";"], trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp parse_string_list(_value), do: []
+
+  defp parse_key_value_list(nil), do: %{}
+
+  defp parse_key_value_list(value) when is_binary(value) do
+    value
+    |> String.replace("\n", ",")
+    |> String.split([",", ";"], trim: true)
+    |> Enum.reduce(%{}, fn segment, acc ->
+      case String.split(segment, ["=", ":"], parts: 2) do
+        [from, to] ->
+          from = from |> String.trim() |> String.downcase()
+          to = to |> String.trim() |> String.downcase()
+
+          if from == "" or to == "" do
+            acc
+          else
+            Map.put(acc, from, to)
+          end
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp parse_key_value_list(_value), do: %{}
 end

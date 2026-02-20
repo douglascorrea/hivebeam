@@ -439,6 +439,8 @@ defmodule Hivebeam.AgentBridge do
 
     handler_args = [
       bridge: self(),
+      session_key: extract_session_key(state.bridge_name),
+      provider: state.acp_provider,
       tool_cwd: state.tool_cwd,
       sandbox_roots: state.sandbox_roots,
       sandbox_default_root: state.sandbox_default_root,
@@ -664,6 +666,12 @@ defmodule Hivebeam.AgentBridge do
     Process.cancel_timer(ref)
     nil
   end
+
+  defp extract_session_key({:via, Registry, {_registry, {:session_bridge, session_key}}})
+       when is_binary(session_key),
+       do: session_key
+
+  defp extract_session_key(_bridge_name), do: nil
 
   defp resolve_command({:ok, {path, args}}) when is_binary(path) and is_list(args),
     do: {:ok, {path, args}}

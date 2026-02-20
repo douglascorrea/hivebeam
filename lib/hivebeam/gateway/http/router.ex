@@ -68,7 +68,7 @@ defmodule Hivebeam.Gateway.HTTP.Router do
     limit = parse_integer(value(conn.body_params, "limit"), 1_000)
 
     with {:ok, session} <- SessionRouter.get_session(gateway_session_key),
-         {:ok, _pid} <- SessionRouter.ensure_worker(gateway_session_key, recovered?: true),
+         :ok <- ensure_attach_worker(session, gateway_session_key),
          {:ok, replay} <- SessionRouter.events(gateway_session_key, after_seq, limit) do
       send_json(conn, 200, %{
         session: session_payload(session),
@@ -102,6 +102,12 @@ defmodule Hivebeam.Gateway.HTTP.Router do
           {:ok, result} ->
             send_json(conn, 200, result)
 
+          {:error, {:policy_denied, details}} ->
+            send_json(conn, 403, %{error: "policy_denied", details: details})
+
+          {:error, :session_closed} ->
+            send_json(conn, 409, %{error: "session_closed"})
+
           {:error, :not_found} ->
             send_json(conn, 404, %{error: "session_not_found"})
 
@@ -114,6 +120,7 @@ defmodule Hivebeam.Gateway.HTTP.Router do
   post "/v1/sessions/:gateway_session_key/cancel" do
     case SessionRouter.cancel(gateway_session_key) do
       {:ok, result} -> send_json(conn, 200, result)
+      {:error, :session_closed} -> send_json(conn, 409, %{error: "session_closed"})
       {:error, :not_found} -> send_json(conn, 404, %{error: "session_not_found"})
       {:error, reason} -> send_json(conn, 500, %{error: inspect(reason)})
     end
@@ -144,6 +151,7 @@ defmodule Hivebeam.Gateway.HTTP.Router do
       true ->
         case SessionRouter.approve(gateway_session_key, approval_ref, decision) do
           {:ok, payload} -> send_json(conn, 200, payload)
+          {:error, :session_closed} -> send_json(conn, 409, %{error: "session_closed"})
           {:error, :approval_not_found} -> send_json(conn, 404, %{error: "approval_not_found"})
           {:error, :not_found} -> send_json(conn, 404, %{error: "session_not_found"})
           {:error, reason} -> send_json(conn, 500, %{error: inspect(reason)})
@@ -215,4 +223,15 @@ defmodule Hivebeam.Gateway.HTTP.Router do
   end
 
   defp parse_integer(_value, default), do: default
+
+  defp ensure_attach_worker(session, gateway_session_key) when is_map(session) do
+    if Map.get(session, :status) == "closed" do
+      :ok
+    else
+      case SessionRouter.ensure_worker(gateway_session_key, recovered?: true) do
+        {:ok, _pid} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
 end
