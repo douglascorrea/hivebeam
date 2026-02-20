@@ -174,9 +174,8 @@ Detailed gateway support matrix and architecture recommendations:
 ## TODO
 
 - [ ] Add a gateway console to monitor audit logs and SLO metrics
-- [ ] Enforce sandbox, approvals, terminal sandbox, policies, etc
 - [ ] Editor tools: diffs, file operations, terminal, etc
 - [ ] Implement web ui to operate agents via gateway
-- [ ] Stabilize tests, permissions, sandbox enforcement, CI, etc
+- [ ] Stabilize tests, permissions, sandbox enforcement, CI, Enforce sandbox, approvals, terminal sandbox, policies, etc
 - [ ] Implement multi-node support adding remote agents
 - [ ] Implement node auto-discovery and management
