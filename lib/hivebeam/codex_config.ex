@@ -172,22 +172,24 @@ defmodule Hivebeam.CodexConfig do
   end
 
   defp discover_local_acp_path do
-    File.cwd!()
-    |> local_acp_candidates()
-    |> Enum.find(&File.exists?/1)
+    case System.find_executable(@default_acp_command) do
+      nil ->
+        local_acp_candidates()
+        |> Enum.find(&File.exists?/1)
+
+      installed_path ->
+        installed_path
+    end
   end
 
-  defp local_acp_candidates(cwd) when is_binary(cwd) do
-    sibling_release = Path.expand("../codex-acp/target/release/codex-acp", cwd)
-    sibling_debug = Path.expand("../codex-acp/target/debug/codex-acp", cwd)
-
+  defp local_acp_candidates do
     home_candidate =
       case System.user_home() do
         nil -> nil
         home -> Path.join([home, ".cargo", "bin", "codex-acp"])
       end
 
-    [sibling_release, sibling_debug, home_candidate, "/usr/local/cargo/bin/codex-acp"]
+    [home_candidate, "/usr/local/cargo/bin/codex-acp"]
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
   end

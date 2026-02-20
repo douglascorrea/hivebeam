@@ -138,37 +138,42 @@ defmodule Hivebeam.CodexConfigTest do
     )
   end
 
-  test "prefers sibling codex-acp build when env command is not set" do
-    with_env(
-      [
-        {"HIVEBEAM_ACP_PROVIDER", "codex"},
-        {"HIVEBEAM_CODEX_ACP_CMD", nil},
-        {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", nil}
-      ],
-      fn ->
-        with_temp_dir("acp_cfg", fn tmp_dir ->
-          app_dir = Path.join(tmp_dir, "hivebeam")
-          sibling_dir = Path.join(tmp_dir, "codex-acp")
-          release_dir = Path.join([sibling_dir, "target", "release"])
-          binary_path = Path.join(release_dir, "codex-acp")
+  test "prefers installed codex-acp over sibling build when env command is not set" do
+    with_temp_dir("acp_cfg", fn tmp_dir ->
+      app_dir = Path.join(tmp_dir, "hivebeam")
+      sibling_dir = Path.join(tmp_dir, "codex-acp")
+      release_dir = Path.join([sibling_dir, "target", "release"])
+      sibling_binary_path = Path.join(release_dir, "codex-acp")
+      bin_dir = Path.join(tmp_dir, "bin")
+      installed_binary_path = Path.join(bin_dir, "codex-acp")
 
-          File.mkdir_p!(app_dir)
-          File.mkdir_p!(release_dir)
-          File.write!(binary_path, "#!/bin/sh\nexit 0\n")
-          File.chmod!(binary_path, 0o755)
+      File.mkdir_p!(app_dir)
+      File.mkdir_p!(release_dir)
+      File.mkdir_p!(bin_dir)
+      File.write!(sibling_binary_path, "#!/bin/sh\necho sibling\n")
+      File.write!(installed_binary_path, "#!/bin/sh\necho installed\n")
+      File.chmod!(sibling_binary_path, 0o755)
+      File.chmod!(installed_binary_path, 0o755)
 
+      with_env(
+        [
+          {"HIVEBEAM_ACP_PROVIDER", "codex"},
+          {"HIVEBEAM_CODEX_ACP_CMD", nil},
+          {"HIVEBEAM_CLAUDE_AGENT_ACP_CMD", nil},
+          {"PATH", bin_dir}
+        ],
+        fn ->
           with_cwd(app_dir, fn ->
-            expected_suffix = Path.join(["codex-acp", "target", "release", "codex-acp"])
             default_command = CodexConfig.default_acp_command()
-            assert String.ends_with?(default_command, expected_suffix)
-            assert File.read!(default_command) == "#!/bin/sh\nexit 0\n"
+            assert default_command == installed_binary_path
+            assert File.read!(default_command) == "#!/bin/sh\necho installed\n"
             assert {:ok, {resolved_path, []}} = CodexConfig.acp_command()
-            assert String.ends_with?(resolved_path, expected_suffix)
-            assert File.read!(resolved_path) == "#!/bin/sh\nexit 0\n"
+            assert resolved_path == installed_binary_path
+            assert File.read!(resolved_path) == "#!/bin/sh\necho installed\n"
           end)
-        end)
-      end
-    )
+        end
+      )
+    end)
   end
 
   defp with_env(pairs, fun) do
