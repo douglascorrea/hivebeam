@@ -120,6 +120,8 @@ defmodule Hivebeam.AcpClientTest do
              AcpClient.init(
                bridge: self(),
                tool_cwd: tmp_dir,
+               terminal_sandbox_mode: :best_effort,
+               terminal_sandbox_backend: :none,
                approval_fun: fn _request, _state -> {:ok, false} end
              )
 

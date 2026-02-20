@@ -161,6 +161,7 @@ defmodule Hivebeam.Gateway.SessionWorkerTest do
                gateway_session_key: key,
                provider: "codex",
                cwd: File.cwd!(),
+               dangerously: true,
                approval_mode: :ask,
                status: "creating",
                connected: false,

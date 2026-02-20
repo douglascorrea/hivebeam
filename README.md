@@ -168,3 +168,10 @@ See the Elixir SDK matrix in `hivebeam-client-elixir/COMPATIBILITY.md` (or that 
 Detailed gateway support matrix and architecture recommendations:
 
 - `ARCHITECTURE.md`
+
+
+
+## TODO
+
+- [ ] Add a gateway console to monitor audit logs and SLO metrics
+- [ ] Enforce sandbox, approvals, terminal sandbox, policies, etc
